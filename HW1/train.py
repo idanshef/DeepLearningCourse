@@ -7,7 +7,7 @@ from dataset import FashionMNISTDataSet
 from lenet5 import LeNet5
 
 fashion_data_dir = r"C:\Users\isheffer\OneDrive - Intel Corporation\Desktop\university\DeepLearning\DeepLearningCourse\HW1\data"
-batch_size = 16
+batch_size = 10
 
 
 def load_train_data(data_dir):
@@ -41,11 +41,10 @@ def train_net(model, data_loaded, epochs, optimizer, loss_func, device):
         for batch in data_loaded:
             optimizer.zero_grad()
 
-            images = batch['image']
-            labels = batch['label']
+            images, labels = batch['image'], batch['label']
 
             images = images.to(device=device, dtype=torch.float)
-            labels = labels.to(device=device, dtype=torch.float)
+            labels = labels.to(device=device, dtype=torch.long)
 
             predicted_labels = model(images)
             loss = loss_func(predicted_labels, labels)

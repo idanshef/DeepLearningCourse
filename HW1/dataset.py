@@ -1,5 +1,7 @@
 import torch
 import idx2numpy
+import numpy as np
+import cv2
 from torch.utils.data import Dataset
 
 
@@ -14,6 +16,6 @@ class FashionMNISTDataSet(Dataset):
 
     def __getitem__(self, idx):
         img_tensor = torch.from_numpy(self.images[idx])
-        label = self.labels[idx]
+        label = torch.tensor(self.labels[idx])
 
-        return {'label': label, 'image': img_tensor}
+        return {'label': label, 'image': img_tensor.unsqueeze(0)}
