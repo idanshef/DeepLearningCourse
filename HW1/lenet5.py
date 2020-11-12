@@ -8,7 +8,7 @@ class LeNet5(nn.Module):
 
         self.conv1 = ConvBlock(in_channels=n_channels, out_channels=6, kernel_size=5, stride=1)
         self.pooling1 = PoolingBlock(kernel_size=2, stride=2)
-        self.conv2 = ConvBlock(in_channels=16, out_channels=6, kernel_size=5, stride=1)  # ???
+        self.conv2 = ConvBlock(in_channels=6, out_channels=16, kernel_size=5, stride=1)
         self.pooling2 = PoolingBlock(kernel_size=2, stride=2)
         self.fc1 = FCBlock(in_channels=400, out_channels=120)
         self.fc2 = FCBlock(in_channels=120, out_channels=84)
