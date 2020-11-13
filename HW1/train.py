@@ -1,36 +1,50 @@
 import os
 import torch
+import utils
 from torch.utils.data import DataLoader, random_split
-# from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from torch import optim
 from dataset import FashionMNISTDataSet
 from lenet5 import LeNet5
 
-fashion_data_dir = r"C:\Users\isheffer\OneDrive - Intel Corporation\Desktop\university\DeepLearning\DeepLearningCourse\HW1\data"
+fashion_data_dir = "/home/idansheffer/repos/others/DeepLearningCourse/HW1/data"
+net_weights_dir = "/home/idansheffer/repos/others/DeepLearningCourse/HW1/net_weights"
 batch_size = 10
 
 
-def load_train_data(data_dir):
+def split_dataset(dataset, val_percent):
+    assert 0. <= val_percent <= 1., "Validation percent must be between [0,1]. Got {}".format(val_percent)
+
+    num_val = int(len(dataset) * val_percent)
+    num_train = len(dataset) - num_val
+
+    train_dataset, val_dataset = random_split(dataset, [num_train, num_val])
+    # val_dataset.dataset.color_jitter = None
+
+    return train_dataset, val_dataset
+
+
+def load_train_data(data_dir, val_percent=10):
     images_path, labels_path = os.path.join(data_dir, "train-images-idx3-ubyte"), \
                                os.path.join(data_dir, "train-labels-idx1-ubyte")
     dataset = FashionMNISTDataSet(images_path, labels_path)
-    data_loader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=4, pin_memory=True)
+    # data_loader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=4, pin_memory=True)
 
-    # train_dataset, val_dataset = split_dataset(dataset, val_percent / 100)
-    #
-    # data_loaders = dict()
-    # data_loaders['train'] = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=4,
-    #                                    pin_memory=True)
-    # data_loaders['val'] = DataLoader(val_dataset, shuffle=False, batch_size=batch_size, num_workers=4,
-    #                                  pin_memory=True)
+    train_dataset, val_dataset = split_dataset(dataset, val_percent / 100)
 
-    return data_loader
+    data_loaders = dict()
+    data_loaders['train'] = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=4,
+                                       pin_memory=True)
+    data_loaders['val'] = DataLoader(val_dataset, shuffle=False, batch_size=batch_size, num_workers=4,
+                                     pin_memory=True)
+
+    return data_loaders
 
 
 def train_net(model, data_loaded, epochs, optimizer, loss_func, device):
     global_step = 0
 
-    # writer = SummaryWriter()
+    writer = SummaryWriter()
     epoch_idx = 0
     for epoch in range(epochs):
         print("Epoch: {0}/{1}".format(epoch_idx, epochs))
@@ -38,7 +52,7 @@ def train_net(model, data_loaded, epochs, optimizer, loss_func, device):
 
         model.train()
         epoch_loss = 0
-        for batch in data_loaded:
+        for batch in data_loaded['train']:
             optimizer.zero_grad()
 
             images, labels = batch['image'], batch['label']
@@ -57,9 +71,9 @@ def train_net(model, data_loaded, epochs, optimizer, loss_func, device):
             print("Loss: {0}".format(loss.item()))
             print('done batch {0}'.format(global_step))
 
-        # writer.add_scalar("Loss-train", epoch_loss / len(data_loaded['train']), global_step)
+        writer.add_scalar("Loss-train", epoch_loss / len(data_loaded['train']), global_step)
 
-    # writer.close()
+    writer.close()
     return model
 
 
@@ -69,6 +83,7 @@ if __name__ == "__main__":
     net = LeNet5()
     net = net.to(device=device)
 
+    utils.download_train_data(fashion_data_dir)
     data = load_train_data(fashion_data_dir)
 
     optimizer = optim.SGD(net.parameters(), weight_decay=1e-8, lr=0.05)
@@ -76,7 +91,9 @@ if __name__ == "__main__":
 
     net = train_net(net, data, epochs=10, optimizer=optimizer, loss_func=loss_func, device=device)
 
-    weights_dir = r"C:\Users\isheffer\OneDrive - Intel Corporation\Desktop\university\DeepLearning\HW1\net_weights"
     weights_file_name = "NormalLeNet5.pt"
-    weights_path = os.path.join(weights_dir, weights_file_name)
+    weights_path = os.path.join(net_weights_dir, weights_file_name)
+    if not os.path.isdir(net_weights_dir):
+        os.makedirs(net_weights_dir)
+
     torch.save(net.state_dict(), weights_path)
