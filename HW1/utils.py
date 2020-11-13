@@ -4,6 +4,16 @@ import gzip
 import shutil
 
 
+base_dir = "/home/idansheffer/repos/others/DeepLearningCourse/HW1"
+
+fashion_data_dir = os.path.join(base_dir, "data")
+net_weights_dir = os.path.join(base_dir, "net_weights")
+
+weight_decay_net_path = os.path.join(net_weights_dir, "WeightDecayLeNet5.pt")
+batch_norm_net_path = os.path.join(net_weights_dir, "BatchNormLeNet5.pt")
+dropout_net_path = os.path.join(net_weights_dir, "DropoutLeNet5.pt")
+
+
 def _gunzip(source_filepath, dest_filepath, block_size=65536):
     with gzip.open(source_filepath, 'rb') as f_in:
         with open(dest_filepath, 'wb') as f_out:

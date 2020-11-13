@@ -3,12 +3,11 @@ import torch
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
-from utils import download_train_data
+from utils import *
 from dataset import FashionMNISTDataSet
 from lenet5 import LeNet5
 
-fashion_data_dir = "/home/idansheffer/repos/others/DeepLearningCourse/HW1/data"
-net_weights_dir = "/home/idansheffer/repos/others/DeepLearningCourse/HW1/net_weights"
+
 batch_size = 10
 
 
@@ -88,8 +87,7 @@ if __name__ == "__main__":
 
     net = train_net(net, data, epochs=10, optimizer=optimizer, loss_func=loss_func, device=device)
 
-    weights_file_name = "NormalLeNet5.pt"
-    weights_path = os.path.join(net_weights_dir, weights_file_name)
+    weights_path = weight_decay_net_path
     if not os.path.isdir(net_weights_dir):
         os.makedirs(net_weights_dir)
 
