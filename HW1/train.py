@@ -1,9 +1,9 @@
 import os
 import torch
-import utils
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
+from utils import download_train_data
 from dataset import FashionMNISTDataSet
 from lenet5 import LeNet5
 
@@ -24,11 +24,8 @@ def split_dataset(dataset, val_percent):
     return train_dataset, val_dataset
 
 
-def load_train_data(data_dir, val_percent=10):
-    images_path, labels_path = os.path.join(data_dir, "train-images-idx3-ubyte"), \
-                               os.path.join(data_dir, "train-labels-idx1-ubyte")
-    dataset = FashionMNISTDataSet(images_path, labels_path)
-    # data_loader = DataLoader(dataset, shuffle=True, batch_size=batch_size, num_workers=4, pin_memory=True)
+def load_train_data(train_images_path, train_labels_path, val_percent=10):
+    dataset = FashionMNISTDataSet(train_images_path, train_labels_path)
 
     train_dataset, val_dataset = split_dataset(dataset, val_percent / 100)
 
@@ -83,8 +80,8 @@ if __name__ == "__main__":
     net = LeNet5()
     net = net.to(device=device)
 
-    utils.download_train_data(fashion_data_dir)
-    data = load_train_data(fashion_data_dir)
+    images_path, labels_path = download_train_data(fashion_data_dir)
+    data = load_train_data(images_path, labels_path)
 
     optimizer = optim.SGD(net.parameters(), weight_decay=1e-8, lr=0.05)
     loss_func = torch.nn.CrossEntropyLoss()
