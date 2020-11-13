@@ -1,7 +1,5 @@
 import torch
 import idx2numpy
-import numpy as np
-import cv2
 from torch.utils.data import Dataset
 
 
