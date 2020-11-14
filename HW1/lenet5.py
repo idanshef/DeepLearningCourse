@@ -15,10 +15,10 @@ class LeNet5(nn.Module):
         self.activation = nn.Tanh()
         self.fc1 = nn.Linear(in_features=120, out_features=84)
         self.fc2 = nn.Linear(in_features=84, out_features=10)
-        self.dropout = nn.Dropout(p=0.5, inplace=True)
+        # self.dropout = nn.Dropout(p=0.5, inplace=True)
         self.softmax = nn.Softmax()
-        self.batch_norm = nn.BatchNorm1d()
-        self.batch_norm = nn.BatchNorm2d(num_features=)
+        # self.batch_norm = nn.BatchNorm1d()
+        # self.batch_norm = nn.BatchNorm2d(num_features=)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -30,7 +30,7 @@ class LeNet5(nn.Module):
         x = self.fc1(x)
         x = self.activation(x)
         x = self.fc2(x)
-        x = self.dropout(x)
+        # x = self.dropout(x)
         return self.softmax(x)  # numerically it is better to output raw logits and use the BCEwithLogitsLoss
 
 
