@@ -1,5 +1,6 @@
 import os
 import torch
+from datetime import datetime
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from torch import optim
@@ -82,12 +83,12 @@ if __name__ == "__main__":
     images_path, labels_path = download_train_data(fashion_data_dir)
     data = load_train_data(images_path, labels_path)
 
-    optimizer = optim.SGD(net.parameters(), weight_decay=1e-8, lr=0.05)
+    optimizer = optim.SGD(net.parameters(), weight_decay=1e-8, lr=0.01)
     loss_func = torch.nn.CrossEntropyLoss()
 
-    net = train_net(net, data, epochs=10, optimizer=optimizer, loss_func=loss_func, device=device)
+    net = train_net(net, data, epochs=20, optimizer=optimizer, loss_func=loss_func, device=device)
 
-    weights_path = weight_decay_net_path
+    weights_path = f"{weight_decay_net_path[:-3]}_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt"
     if not os.path.isdir(net_weights_dir):
         os.makedirs(net_weights_dir)
 
