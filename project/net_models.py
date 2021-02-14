@@ -2,9 +2,27 @@ import torch
 import torch.nn as nn
 
 
-class VisualNet(nn.Module):
+class CompoundNet(nn.Module):
     def __init__(self):
-        super().__init__()
+        super(CompoundNet, self).__init__()
+        self.appearance_net = AppearanceNet()
+        self.structural_net = StructuralNet()
+        self.global_avg_pooling_2d = nn.AdaptiveAvgPool2d((1, 128))
+        self.global_avg_pooling_3d = nn.AdaptiveAvgPool2d((1, 1, 128))
+
+    def forward(self, I, G):
+        I = self.appearance_net(I)
+        I = self.global_avg_pooling_2d(I)
+
+        G = self.structural_net(G)
+        G = self.global_avg_pooling_3d(G)
+
+        concatenation = [I, G]
+
+
+class AppearanceNet(nn.Module):
+    def __init__(self):
+        super(AppearanceNet, self).__init__()
         self.conv_section = nn.Sequential(
             ConvBlock2D(in_channels=1, out_channels=64),
             ConvBlock2D(in_channels=64, out_channels=64),
