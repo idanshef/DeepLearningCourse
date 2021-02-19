@@ -2,7 +2,6 @@ import os
 import cv2
 import numpy as np
 import torch
-import utils
 import random
 from torch.utils.data import Dataset
 from robotcar_dataset_sdk.image import load_image
