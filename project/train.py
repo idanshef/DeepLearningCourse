@@ -3,88 +3,91 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 from torch import optim
+from torch.utils.data import DataLoader, random_split
 from net_models import *
+from dataset import RobotCarDataset
 from robotcar_dataset_sdk.camera_model import CameraModel
 from robotcar_dataset_sdk.image import load_image
 import cv2 as cv
 
-net_weights_dir = "/path/to/weights/dir"
+
+def split_dataset(dataset, val_percent):
+    assert 0. <= val_percent <= 1., f"Validation percent must be between [0,1]. Got {val_percent}"
+
+    num_val = int(len(dataset) * val_percent)
+    num_train = len(dataset) - num_val
+
+    train_dataset, val_dataset = random_split(dataset, [num_train, num_val])
+    val_dataset.dataset.color_jitter = None ############
+
+    return train_dataset, val_dataset
 
 
-def load_data(train_images_path, train_labels_path, val_percent=10):
-    # dataset = FashionMNISTDataSet(train_images_path, train_labels_path)
+def load_data(data_dir, batch_size, val_percent=10):
+    dataset = RobotCarDataset(data_dir)
+    train_dataset, val_dataset = split_dataset(dataset, val_percent / 100)
 
-    # train_dataset, val_dataset = split_dataset(dataset, val_percent / 100)
-
-    # data_loaders = dict()
-    # data_loaders['train'] = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=4,
-    #                                    pin_memory=True)
-    # data_loaders['val'] = DataLoader(val_dataset, shuffle=False, batch_size=batch_size, num_workers=4,
-    #                                  pin_memory=True)
-
-    # return data_loaders
-    return
+    data_loaders = dict()
+    data_loaders['train'] = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=4,
+                                       pin_memory=True)
+    data_loaders['val'] = DataLoader(val_dataset, shuffle=False, batch_size=batch_size, num_workers=4,
+                                     pin_memory=True)
+    return data_loaders
 
 
-def train_net(model, data_loaded, epochs, optimizer, loss_func, device):
-    # global_step = 0
+def train_net(model, data, epochs, optimizer, loss_func, device):
+    global_step = 0
 
-    # epoch_idx = 0
-    # for epoch in range(epochs):
-    #     print(f"Epoch: {epoch_idx}/{epochs}")
-    #     epoch_idx += 1
+    for epoch in range(epochs):
+        print(f"Epoch: {epoch}/{epochs}")
 
-    #     model.train()
-    #     epoch_loss = 0
-    #     for batch in data_loaded['train']:
-    #         optimizer.zero_grad()
+        model.train()
+        epoch_loss = 0
+        for batch in data['train']:
+            optimizer.zero_grad()
 
-    #         images, labels = batch['image'], batch['label']
+            Ii, Gi = batch['Ii'], batch['Gi']
+            Ij, Gj = batch['Ij'], batch['Gj']
+            labels = batch['label']
 
-    #         images = images.to(device=device, dtype=torch.float)
-    #         labels = labels.to(device=device, dtype=torch.long)
+            Ii, Gi = Ii.to(device=device, dtype=torch.float32), Gi.to(device=device, dtype=torch.float32)
+            Ij, Gj = Ij.to(device=device, dtype=torch.float32), Gj.to(device=device, dtype=torch.float32)
+            labels = labels.to(device=device, dtype=torch.bool)
+            
+            Xi_predicted_descriptor = model(Ii, Gi)
+            Xj_predicted_descriptor = model(Ij, Gj)
+            
+            loss = loss_func(Xi_predicted_descriptor, Xj_predicted_descriptor, labels)
+            epoch_loss += loss.item()
 
-    #         predicted_labels = model(images)
-    #         loss = loss_func(predicted_labels, labels)
-    #         epoch_loss += loss.item()
+            loss.backward()
+            optimizer.step()
 
-    #         loss.backward()
-    #         optimizer.step()
+            global_step += 1
+            print("Loss: {0}".format(loss.item()))
+            print('done batch {0}'.format(global_step))
 
-    #         global_step += 1
-    #         print("Loss: {0}".format(loss.item()))
-    #         print('done batch {0}'.format(global_step))
+        writer.add_scalar("Loss-train", epoch_loss / len(data_loaded['train']), global_step)
 
-    #     writer.add_scalar("Loss-train", epoch_loss / len(data_loaded['train']), global_step)
-
-    # writer.close()
-    # return model
-    return
+    writer.close()
+    return model
 
 
 if __name__ == "__main__":
     
+    data_dir = r"C:\Users\isheffer\OneDrive - Intel Corporation\Desktop\university\DeepLearning\Project\sample"
 
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    data_loader = load_data(data_dir, 1, 10)
 
-    # img_path = r"C:\Users\isheffer\OneDrive - Intel Corporation\Desktop\university\DeepLearning\Project\sample\mono_rear\1418381801212730.png"
-    # img_dir = os.path.dirname(img_path)
-    # models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-    # camera_model = CameraModel(models_dir, img_dir)
-    # cv.imshow('img', load_image(img_path, camera_model))
-    # cv.waitKey(0)
+    net_model = CompoundNet()
+    net_model = net_model.to(device=device)
 
+    loss_func = nn.MarginRankingLoss()
+    optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    # data = load_data()
-
-    # net_model = CompoundNet()
-    # net_model = net_model.to(device=device)
-
-    # loss_func = nn.MarginRankingLoss()
-    # optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
-
-    # net_model = train_net(net_model, data, epochs=20, optimizer=optimizer, loss_func=loss_func, device=device)
+    net_model = train_net(net_model, data_loader, epochs=20, optimizer=optimizer, loss_func=loss_func, device=device)
 
     # weights_path = f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt"
     # if not os.path.isdir(net_weights_dir):

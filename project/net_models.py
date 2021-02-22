@@ -9,22 +9,19 @@ class CompoundNet(nn.Module):
         self.structural_net = StructuralNet()
         self.global_avg_pooling_2d = nn.AdaptiveAvgPool2d((1, 128))
         self.global_avg_pooling_3d = nn.AdaptiveAvgPool2d((1, 1, 128))
+        self.fusion_net = FusionNet()
 
     def forward(self, I, G):
-        I = self.appearance_net(I)
-        I = self.global_avg_pooling_2d(I)
-
-        G = self.structural_net(G)
-        G = self.global_avg_pooling_3d(G)
-
-        concatenation = [I, G]
+        I = self.global_avg_pooling_2d(self.appearance_net(I))
+        G = self.global_avg_pooling_3d(self.structural_net(G))
+        return self.fusion_net(I, G)
 
 
 class AppearanceNet(nn.Module):
     def __init__(self):
         super(AppearanceNet, self).__init__()
         self.conv_section = nn.Sequential(
-            ConvBlock2D(in_channels=1, out_channels=64),
+            ConvBlock2D(in_channels=3, out_channels=64),
             ConvBlock2D(in_channels=64, out_channels=64),
             ConvBlock2D(in_channels=64, out_channels=64),
             ConvBlock2D(in_channels=64, out_channels=64),
@@ -85,3 +82,10 @@ class ConvBlock3D(nn.Module):
 
     def forward(self, x):
         return self.conv_block(x)
+
+class FusionNet(nn.Module):
+    def __init__(self):
+        super(FusionNet, self).__init__()
+    
+    def forward(self, I, G):
+        return [I, G]
