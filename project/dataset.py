@@ -7,6 +7,7 @@ import pandas as pd
 from geopy.distance import distance
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
+import utils
 from robotcar_dataset_sdk.image import load_image
 from robotcar_dataset_sdk.camera_model import CameraModel
 from robotcar_dataset_sdk.build_pointcloud import build_pointcloud
@@ -31,12 +32,6 @@ class RobotCarDataset(Dataset):
         samples_couple = self.samples_couple_list[idx]
         Ii, Gi = samples_couple.Xi.load_sample(self.camera_model, self.data, self.extrinsics_dir)
         Ij, Gj = samples_couple.Xj.load_sample(self.camera_model, self.data, self.extrinsics_dir)
-        
-        # Ii = (2*self.to_tensor(Ii)-1)/2
-        # Ij = (2*self.to_tensor(Ij)-1)/2
-        
-        # Gi = pointcloud_to_voxel_grid(Gi)
-        # Gj = pointcloud_to_voxel_grid(Gj)
 
         return {'Ii': Ii, 'Gi': Gi, 'Ij': Ij, 'Gj': Gj, 'label': samples_couple.match}
 
@@ -48,14 +43,13 @@ class Sample:
         
         relevant_lidar = data.lidar_scans_timestamps[abs(data.lidar_scans_timestamps - int(os.path.basename(self.img_path)[:-4])) <= max_diff_sec * 1e6]
         self.start_time, self.end_time = relevant_lidar.min(), relevant_lidar.max()
-        # self.to_tensor = ToTensor()
     
     def load_sample(self, camera_model, data, extrinsics_dir):
         img_mat = load_image(self.img_path, camera_model)
         pointcloud, reflectance = build_pointcloud(data.lidar_dir, data.poses_file_path, extrinsics_dir, self.start_time, self.end_time)
         
         I = (2 * (torch.from_numpy(img_mat).permute(2, 0, 1)/255.) - 1) / 2
-        G = torch.from_numpy(pointcloud)
+        G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(np.array(pointcloud[:-1]).transpose(), np.zeros(3))).unsqueeze(0)
         
         return I, G
 
