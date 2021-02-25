@@ -6,9 +6,6 @@ from torch import optim
 from torch.utils.data import DataLoader, random_split
 from net_models import *
 from dataset import RobotCarDataset
-from robotcar_dataset_sdk.camera_model import CameraModel
-from robotcar_dataset_sdk.image import load_image
-import pandas as pd
 
 
 def split_dataset(dataset, val_percent):
