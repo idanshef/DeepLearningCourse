@@ -2,12 +2,10 @@ import os
 import torch
 import random
 import numpy as np
-import pandas as pd
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 import utils
 from robotcar_dataset_sdk.image import load_image
-from robotcar_dataset_sdk.camera_model import CameraModel
 from robotcar_dataset_sdk.build_pointcloud import build_pointcloud
 
 
@@ -24,11 +22,12 @@ class RobotCarDataset(Dataset):
     def __getitem__(self, idx_i):
         Ii, Gi = self._load_sample(idx_i)
         
+        match_idxs = self._calc_match_idxs(idx_i)
         if random.random() > 0.5:
-            idx_j = self._get_match_idx(idx_i)
+            idx_j = self._get_match_idx(idx_i, match_idxs)
             y = 1
         else:
-            idx_j = self._get_non_match_idx(idx_i)
+            idx_j = self._get_non_match_idx(idx_i, match_idxs)
             y = -1
         
         Ij, Gj = self._load_sample(idx_j)
@@ -62,8 +61,7 @@ class RobotCarDataset(Dataset):
         
         return np.where(distance_m <= self.match_threshold)[0]
     
-    def _get_match_idx(self, idx_i):
-        match_idxs = self._calc_match_idxs(idx_i)
+    def _get_match_idx(self, idx_i, match_idxs):
         while True:
             idx_j = random.choice(match_idxs)
             if self.samples_list[idx_i]['date'] != self.samples_list[idx_j]['date']:
@@ -71,10 +69,11 @@ class RobotCarDataset(Dataset):
             match_idxs = np.delete(match_idxs, np.where(match_idxs == idx_j))
         return idx_j
     
-    def _get_non_match_idx(self, idx_i):
+    def _get_non_match_idx(self, idx_i, match_idxs):
+        non_matches_idxs = np.arange(self.__len__())
+        non_matches_idxs = np.delete(non_matches_idxs, match_idxs)
         while True:
-            idx_j = random.randrange(self.__len__())
-            # match_idxs = self._calc_match_idxs(idx_i)
+            # idx_j = random.randrange(self.__len__())
             # None match, Random of N elements, run through net, return the lowest d(Xi,Xj)
             if utils.is_match(self.samples_list[idx_i], self.samples_list[idx_j], self.match_threshold) == False:
                 break
