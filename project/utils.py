@@ -1,4 +1,8 @@
+import os
 import numpy as np
+import pandas as pd
+from geopy.distance import distance
+from robotcar_dataset_sdk.camera_model import CameraModel
 
 
 def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 48), volume_size = (40, 40, 20)):
@@ -41,8 +45,8 @@ def build_samples_list(data_dir, structure_time_span):
             data_dict['poses_path'] = poses_file_path
             
             img_timestamp = int(img_name[:-4])
-            data_dict['start_time'] = str(curr_timestamp + val - round(structure_time_span/2) * 1e6)
-            data_dict['end_time'] = str(curr_timestamp + val + round(structure_time_span/2) * 1e6)
+            data_dict['start_time'] = img_timestamp - round(structure_time_span/2) * 1e6
+            data_dict['end_time'] = img_timestamp + round(structure_time_span/2) * 1e6
             
             closest_time_idx = abs(gps_df['timestamp'] - img_timestamp).argmin()
             data_dict['latitude'] = gps_df['latitude'][closest_time_idx]
@@ -50,15 +54,15 @@ def build_samples_list(data_dir, structure_time_span):
 
             data_list.append(data_dict)
             
-            curr_lat_long = np.array(list(map(np.radians, [data_dict['latitude'], data_dict['longitude']])))
+            curr_lat_long = np.array([list(map(np.radians, [data_dict['latitude'], data_dict['longitude']]))])
             if full_gps_df_rad is None:
                 full_gps_df_rad = curr_lat_long
             else:
-                full_gps_df_rad = np.concatenate(full_gps_df_rad, curr_lat_long)
+                full_gps_df_rad = np.concatenate((full_gps_df_rad, curr_lat_long))
     
     return data_list, full_gps_df_rad
 
 def is_match(Xi, Xj, threshold_m):
-    Xi_lat_long = (Xi['latitude'], Xi['logitude'])
-    Xj_lat_long = (Xj['latitude'], Xj['logitude'])
+    Xi_lat_long = (Xi['latitude'], Xi['longitude'])
+    Xj_lat_long = (Xj['latitude'], Xj['longitude'])
     return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m
