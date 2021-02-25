@@ -14,81 +14,67 @@ from robotcar_dataset_sdk.build_pointcloud import build_pointcloud
 
 
 class RobotCarDataset(Dataset):
-    def __init__(self, data_dir):
-        self.data = DatasetStructure(data_dir)
-        
-        self.samples_couple_list = create_dataset(self.data)
-        self.num_of_couples = len(self.samples_couple_list)
-        
+    def __init__(self, data_dir, structure_time_span, match_threshold):
+        self.samples_list , self.full_gps_df_rad = utils.build_samples_list(data_dir, structure_time_span)        
         self.extrinsics_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extrinsics")
-        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-        self.camera_model = CameraModel(models_dir, self.data.images_dir)
-        
+        self.match_threshold = match_threshold
+        self.to_tensor = torch.ToTensor()
 
     def __len__(self):
-        return self.num_of_couples
+        return len(self.samples_list)
 
-    def __getitem__(self, idx):
-        samples_couple = self.samples_couple_list[idx]
-        Ii, Gi = samples_couple.Xi.load_sample(self.camera_model, self.data, self.extrinsics_dir)
-        Ij, Gj = samples_couple.Xj.load_sample(self.camera_model, self.data, self.extrinsics_dir)
-
-        return {'Ii': Ii, 'Gi': Gi, 'Ij': Ij, 'Gj': Gj, 'label': samples_couple.match}
-
-
-class Sample:
-    def __init__(self, img_path, data, max_diff_sec=5):
-        self.img_path = img_path
-        self.lidar_dir = data.lidar_dir
+    def __getitem__(self, idx_i):
+        Ii, Gi = self._load_sample(idx_i)
         
-        relevant_lidar = data.lidar_scans_timestamps[abs(data.lidar_scans_timestamps - int(os.path.basename(self.img_path)[:-4])) <= max_diff_sec * 1e6]
-        self.start_time, self.end_time = relevant_lidar.min(), relevant_lidar.max()
+        if random.random() > 0.5:
+            idx_j = _get_match_idx(idx_i)
+            y = 1
+        else:
+            idx_j = self._get_non_match_idx(idx_i)
+            y = -1
+        
+        Ij, Gj = self._load_sample(idx_j)
+
+        return {'Ii': Ii, 'Gi': Gi, 'Ij': Ij, 'Gj': Gj, 'is_match': y}
     
-    def load_sample(self, camera_model, data, extrinsics_dir):
-        img_mat = load_image(self.img_path, camera_model)
-        pointcloud, reflectance = build_pointcloud(data.lidar_dir, data.poses_file_path, extrinsics_dir, self.start_time, self.end_time)
+    def _load_sample(self, idx):
+        curr_sample = self.samples_list[idx]
+        I = load_image(curr_sample['I'], curr_sample['camera'])
+        I = (2 * self.to_tensor(I) - 1) / 2
         
-        I = (2 * (torch.from_numpy(img_mat).permute(2, 0, 1)/255.) - 1) / 2
-        G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(np.array(pointcloud[:-1]).transpose(), np.zeros(3))).unsqueeze(0)
+        pointcloud, reflectance = build_pointcloud(curr_sample['lidar_dir'], curr_sample['poses_path'], 
+                                                   self.extrinsics_dir, curr_sample['start_time'], curr_sample['end_time'])
+        pointcloud = np.array(pointcloud[:-1]).transpose()
+        G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(pointcloud)).unsqueeze(0)
         
-        return I, G
-
-
-class SamplesCouple:
-    def __init__(self, Ii_path, Ij_path, data):
-        self.Xi = Sample(Ii_path, data)
-        self.Xj = Sample(Ij_path, data)
-        self.match = self._calculate_match(data.gps_df)
+        return I,G
     
-    def _calculate_match(self, gps_df):
-        Xi_closest_time_idx = abs(gps_df['timestamp'] - int(os.path.basename(self.Xi.img_path)[:-4])).argmin()
-        Xj_closest_time_idx = abs(gps_df['timestamp'] - int(os.path.basename(self.Xj.img_path)[:-4])).argmin()
+    def _calc_match_idxs(self, idx):
+        Xi = self.samples_list[idx]
+        Xi_lat_long = np.array([Xi['latitude'], Xi['logitude']])
+        Xi_lat_long_mat = np.tile(Xi_lat_long, (self.full_gps_df.shape[0], 1))
+        Xi_lat_long_mat_rad = np.array(list(map(np.radians, Xi_lat_long_mat)))
         
-        Xi_lat_long = (gps_df['latitude'][Xi_closest_time_idx], gps_df['longitude'][Xi_closest_time_idx])
-        Xj_lat_long = (gps_df['latitude'][Xj_closest_time_idx], gps_df['longitude'][Xj_closest_time_idx])
+        lat1, lon1 = self.full_gps_df_rad[:, 0], self.full_gps_df_rad[:, 1]
+        lat2, lon2 = Xi_lat_long_mat_rad[:, 0], Xi_lat_long_mat_rad[:, 1]
+        dlon = lon2 - lon1
+        dlat = lat2 - lat1
         
-        return distance(Xi_lat_long, Xj_lat_long).m <= 20
-
-class DatasetStructure:
-    def __init__(self, data_dir):
-        self.images_dir = os.path.join(data_dir, "stereo", "centre")
-        self.images_list = list(filter(lambda val: val[0] == "1", os.listdir(self.images_dir)))
+        distance_m = 6367 * 1e3 * 2 * np.arcsin(np.sqrt(np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2))
         
-        self.lidar_dir = os.path.join(data_dir, "ldmrs")
-        lidar_scans_paths = list(filter(lambda val: val[0] == "1", os.listdir(self.lidar_dir)))
-        self.lidar_scans_timestamps = np.array([int(val[:-4]) for val in lidar_scans_paths])
-        
-        gps_dir = os.path.join(data_dir, "gps")
-        self.poses_file_path = os.path.join(gps_dir, "ins.csv")
-        self.gps_df = pd.read_csv(self.poses_file_path)
+        return np.where(distance_m <= self.match_threshold)[0]
     
-
-def create_dataset(data):
-    samples_couple_list = list()
+    def _get_match_idx(self, idx_i):
+        match_idxs = self._calc_match_idxs(idx_i, self.match_threshold)
+        while True:
+            idx_j = random.choice(match_idxs)
+            if self.samples_list[idx_i]['date'] != self.samples_list[idx_j]['date']:
+                break
+        return idx_j
     
-    N = len(data.images_list) * 2
-    for i in range(N):
-        img_couple_paths = [os.path.join(data.images_dir, val) for val in random.sample(data.images_list, 2)]
-        samples_couple_list.append(SamplesCouple(img_couple_paths[0], img_couple_paths[1], data))
-    
-    return samples_couple_list
+    def _get_non_match_idx(self, idx_i):
+        while True:
+            idx_j = random.randrange(self.__len__())
+            if utils.is_match(self.samples_list[idx_i], self.samples_list[idx_j], self.match_threshold) == False:
+                break
+        return idx_j
