@@ -15,8 +15,10 @@
 import bisect
 import csv
 import numpy as np
+import pandas as pd
 import numpy.matlib as ml
-from transform import *
+from .transform import *
+import time
 
 
 def interpolate_vo_poses(vo_path, pose_timestamps, origin_timestamp):
@@ -60,6 +62,13 @@ def interpolate_vo_poses(vo_path, pose_timestamps, origin_timestamp):
     return interpolate_poses(vo_timestamps, abs_poses, pose_timestamps, origin_timestamp)
 
 
+def interpolate_ins_poses_new(ins_path, pose_timestamps, origin_timestamp, use_rtk=False):
+    ins_df = pd.read_csv(ins_path, sep=',')
+    ins_timestamps = list(map(int,list(ins_df['timestamp'])))
+    xyzrpy = df[['northing', 'easting', 'down', 'roll', 'pitch', 'yaw']].to_numpy()
+    abs_poses = build_se3_transform_new(xyzrpy)
+    return interpolate_poses_new(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
+
 def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=False):
     """Interpolate poses from INS.
 
@@ -72,6 +81,8 @@ def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=F
         list[numpy.matrixlib.defmatrix.matrix]: SE3 matrix representing interpolated pose for each requested timestamp.
 
     """
+    
+    # start = time.time()
     with open(ins_path) as ins_file:
         ins_reader = csv.reader(ins_file)
         headers = next(ins_file)
@@ -96,10 +107,97 @@ def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=F
 
     ins_timestamps = ins_timestamps[1:]
     abs_poses = abs_poses[1:]
+    to_return = interpolate_poses(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
 
-    return interpolate_poses(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
+    return to_return
 
+def interpolate_poses_new(pose_timestamps, abs_poses, requested_timestamps, origin_timestamp):
+    requested_timestamps.insert(0, origin_timestamp)
+    requested_timestamps = np.array(requested_timestamps)
+    
+    abs_quaternions = np.zeros((4, abs_poses.shape[0]))
+    abs_positions = np.zeros((3, abs_poses.shape[0]))
+    
+    # abs_quaternions = so3_to_quaternion_new(abs_poses[:, [:3, 4:7, 8:11]])
+    abs_quaternions = so3_to_quaternion_new(abs_poses[:, [0,1,2,4,5,6,8,9,10]])
+    abs_positions = abs_poses[:, [3, 7, 11]]
+    
+    upper_indices = [bisect.bisect(pose_timestamps, pt) for pt in requested_timestamps]
+    lower_indices = [u - 1 for u in upper_indices]
 
+    if max(upper_indices) >= len(pose_timestamps):
+        upper_indices = [min(i, len(pose_timestamps) - 1) for i in upper_indices]
+
+    fractions = (requested_timestamps - pose_timestamps[lower_indices]) // \
+                (pose_timestamps[upper_indices] - pose_timestamps[lower_indices])
+
+    quaternions_lower = abs_quaternions[:, lower_indices]
+    quaternions_upper = abs_quaternions[:, upper_indices]
+
+    d_array = (quaternions_lower * quaternions_upper).sum(0)
+
+    linear_interp_indices = np.nonzero(d_array >= 1)
+    sin_interp_indices = np.nonzero(d_array < 1)
+
+    scale0_array = np.zeros(d_array.shape)
+    scale1_array = np.zeros(d_array.shape)
+
+    scale0_array[linear_interp_indices] = 1 - fractions[linear_interp_indices]
+    scale1_array[linear_interp_indices] = fractions[linear_interp_indices]
+
+    theta_array = np.arccos(np.abs(d_array[sin_interp_indices]))
+
+    scale0_array[sin_interp_indices] = \
+        np.sin((1 - fractions[sin_interp_indices]) * theta_array) / np.sin(theta_array)
+    scale1_array[sin_interp_indices] = \
+        np.sin(fractions[sin_interp_indices] * theta_array) / np.sin(theta_array)
+
+    negative_d_indices = np.nonzero(d_array < 0)
+    scale1_array[negative_d_indices] = -scale1_array[negative_d_indices]
+
+    quaternions_interp = np.tile(scale0_array, (4, 1)) * quaternions_lower \
+                         + np.tile(scale1_array, (4, 1)) * quaternions_upper
+
+    positions_lower = abs_positions[:, lower_indices]
+    positions_upper = abs_positions[:, upper_indices]
+
+    positions_interp = np.multiply(np.tile((1 - fractions), (3, 1)), positions_lower) \
+                       + np.multiply(np.tile(fractions, (3, 1)), positions_upper)
+
+    poses_mat = ml.zeros((4, 4 * len(requested_timestamps)))
+
+    poses_mat[0, 0::4] = 1 - 2 * np.square(quaternions_interp[2, :]) - \
+                         2 * np.square(quaternions_interp[3, :])
+    poses_mat[0, 1::4] = 2 * np.multiply(quaternions_interp[1, :], quaternions_interp[2, :]) - \
+                         2 * np.multiply(quaternions_interp[3, :], quaternions_interp[0, :])
+    poses_mat[0, 2::4] = 2 * np.multiply(quaternions_interp[1, :], quaternions_interp[3, :]) + \
+                         2 * np.multiply(quaternions_interp[2, :], quaternions_interp[0, :])
+
+    poses_mat[1, 0::4] = 2 * np.multiply(quaternions_interp[1, :], quaternions_interp[2, :]) \
+                         + 2 * np.multiply(quaternions_interp[3, :], quaternions_interp[0, :])
+    poses_mat[1, 1::4] = 1 - 2 * np.square(quaternions_interp[1, :]) \
+                         - 2 * np.square(quaternions_interp[3, :])
+    poses_mat[1, 2::4] = 2 * np.multiply(quaternions_interp[2, :], quaternions_interp[3, :]) - \
+                         2 * np.multiply(quaternions_interp[1, :], quaternions_interp[0, :])
+
+    poses_mat[2, 0::4] = 2 * np.multiply(quaternions_interp[1, :], quaternions_interp[3, :]) - \
+                         2 * np.multiply(quaternions_interp[2, :], quaternions_interp[0, :])
+    poses_mat[2, 1::4] = 2 * np.multiply(quaternions_interp[2, :], quaternions_interp[3, :]) + \
+                         2 * np.multiply(quaternions_interp[1, :], quaternions_interp[0, :])
+    poses_mat[2, 2::4] = 1 - 2 * np.square(quaternions_interp[1, :]) - \
+                         2 * np.square(quaternions_interp[2, :])
+
+    poses_mat[0:3, 3::4] = positions_interp
+    poses_mat[3, 3::4] = 1
+
+    poses_mat = np.linalg.solve(poses_mat[0:4, 0:4], poses_mat)
+
+    poses_out = [0] * (len(requested_timestamps) - 1)
+    for i in range(1, len(requested_timestamps)):
+        poses_out[i - 1] = poses_mat[0:4, i * 4:(i + 1) * 4]
+
+    return poses_out
+    
 def interpolate_poses(pose_timestamps, abs_poses, requested_timestamps, origin_timestamp):
     """Interpolate between absolute poses.
 
@@ -126,6 +224,7 @@ def interpolate_poses(pose_timestamps, abs_poses, requested_timestamps, origin_t
 
     abs_quaternions = np.zeros((4, len(abs_poses)))
     abs_positions = np.zeros((3, len(abs_poses)))
+    
     for i, pose in enumerate(abs_poses):
         if i > 0 and pose_timestamps[i-1] >= pose_timestamps[i]:
             raise ValueError('Pose timestamps must be in ascending order')

@@ -40,7 +40,31 @@ def build_se3_transform(xyzrpy):
     se3[0:3, 3] = np.matrix(xyzrpy[0:3]).transpose()
     return se3
 
+def build_se3_transform_new(xyzrpy):
+    se3 = np.zeros((len(xyzrpy.index),16))
+    # se3[:, [0:3,4:7,8:11]] = euler_to_so3_new(xyzrpy[3:])
+    se3[:, [0,1,2,4,5,6,8,9,10]] = euler_to_so3_new(xyzrpy[3:])
+    se3[:, [3,7,11]] = xyzrpy[:3]
+    return se3
 
+
+def euler_to_so3_new(rpy):
+    sin_0, cos_0 = np.sin(rpy[0]), np.cos(rpy[0])
+    sin_1, cos_1 = np.sin(rpy[1]), np.cos(rpy[1])
+    sin_2, cos_2 = np.sin(rpy[2]), np.cos(rpy[2])
+    
+    R00 = cos_2 * cos_1
+    R01 = -sin_2 * cos_0
+    R02 = cos_2 * sin_1 * sin_0
+    R10 = sin_2 * cos_1
+    R11 = cos_2*cos_0 + sin_0*sin_1*sin_2
+    R12 = -sin_0*cos_2 + cos_0*sin_1*sin_2
+    R20 = -sin_1
+    R21 = sin_0*cos_1
+    R22 = cos_0*cos_1
+    
+    return np.stack([R00,R01,R02,R10,R11,R12,R20,R21,R22]).transpose()
+    
 def euler_to_so3(rpy):
     """Converts Euler angles to an SO3 rotation matrix.
 
@@ -101,7 +125,59 @@ def so3_to_euler(so3):
             raise ValueError("Could not find valid pitch angle")
         return np.matrix([roll, pitch_poss[1], yaw])
 
+def so3_to_quaternion_new(so3):
+    R_xx = so3[:, 0]
+    R_xy = so3[:, 1]
+    R_xz = so3[:, 2]
+    R_yx = so3[:, 3]
+    R_yy = so3[:, 4]
+    R_yz = so3[:, 5]
+    R_zx = so3[:, 6]
+    R_zy = so3[:, 7]
+    R_zz = so3[:, 8]
+    
 
+    so3_trace = R_xx + R_yy + Y_zz + 1
+    w=np.zeros(R_xx.shape[0],1)
+    w = np.sqrt(so3_trace, where=so3_trace>=0) / 2
+    
+    x = 1 + R_xx - R_yy - R_zz
+    x[x<0] = 0
+    x = np.sqrt(x) / 2
+    
+    y = 1 + R_yy - R_xx - R_zz
+    y[y<0] = 0
+    y = np.sqrt(y) / 2
+    
+    z = 1 + R_zz - R_yy - R_xx
+    z[z<0] = 0
+    z = np.sqrt(z) / 2
+
+    max_indexes = np.argmax(np.stack([w,x,y,z]), axis=1)
+    max_0 = np.where(max_indexes==0)[0]
+    max_1 = np.where(max_indexes==1)[0]
+    max_2 = np.where(max_indexes==2)[0]
+    max_3 = np.where(max_indexes==3)[0]
+    
+    x[max_0] = (R_zy[max_0] - R_yz[max_0]) / (4 * w[max_0])
+    y[max_0] = (R_xz[max_0] - R_zx[max_0]) / (4 * w[max_0])
+    z[max_0] = (R_yx[max_0] - R_xy[max_0]) / (4 * w[max_0])
+    
+    w[max_1] = (R_zy[max_1] - R_yz[max_1]) / (4 * x[max_1])
+    y[max_1] = (R_xy[max_1] + R_yx[max_1]) / (4 * x[max_1])
+    z[max_1] = (R_zx[max_1] + R_xz[max_1]) / (4 * x[max_1])
+    
+    w[max_2] = (R_xz[max_2] - R_zx[max_2]) / (4 * y[max_2])
+    x[max_2] = (R_xy[max_2] + R_yx[max_2]) / (4 * y[max_2])
+    z[max_2] = (R_yz[max_2] + R_zy[max_2]) / (4 * y[max_2])
+
+    w[max_3] = (R_yx[max_3] - R_xy[max_3]) / (4 * z[max_3])
+    x[max_3] = (R_zx[max_3] + R_xz[max_3]) / (4 * z[max_3])
+    y[max_3] = (R_yz[max_3] + R_zy[max_3]) / (4 * z[max_3])
+    
+    return np.array([w, x, y, z])
+    
+    
 def so3_to_quaternion(so3):
     """Converts an SO3 rotation matrix to a quaternion
 

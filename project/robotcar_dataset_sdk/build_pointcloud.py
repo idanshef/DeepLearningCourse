@@ -15,10 +15,11 @@
 import os
 import re
 import numpy as np
+import time
 
-from transform import build_se3_transform
-from interpolate_poses import interpolate_vo_poses, interpolate_ins_poses
-from velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_pointcloud
+from .transform import build_se3_transform
+from .interpolate_poses import interpolate_vo_poses, interpolate_ins_poses, interpolate_ins_poses_new
+from .velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_pointcloud
 
 
 def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time, origin_time=-1):
@@ -63,13 +64,16 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
 
     poses_type = re.search('(vo|ins|rtk)\.csv', poses_file).group(1)
 
+    
     if poses_type in ['ins', 'rtk']:
         with open(os.path.join(extrinsics_dir, 'ins.txt')) as extrinsics_file:
             extrinsics = next(extrinsics_file)
+            start = time.time()
             G_posesource_laser = np.linalg.solve(build_se3_transform([float(x) for x in extrinsics.split(' ')]),
                                                  G_posesource_laser)
-
-        poses = interpolate_ins_poses(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
+            
+        # poses = interpolate_ins_poses(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
+        poses = interpolate_ins_poses_new(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
     else:
         # sensor is VO, which is located at the main vehicle frame
         poses = interpolate_vo_poses(poses_file, timestamps, origin_time)
@@ -80,6 +84,7 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
     else:
         reflectance = np.empty((0))
 
+    start = time.time()
     for i in range(0, len(poses)):
         scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
         if "velodyne" not in lidar:
@@ -111,6 +116,8 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
 
         scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
         pointcloud = np.hstack([pointcloud, scan])
+    end = time.time()
+    print(f"for loop: {end-start}")
 
     pointcloud = pointcloud[:, 1:]
     if pointcloud.shape[1] == 0:
