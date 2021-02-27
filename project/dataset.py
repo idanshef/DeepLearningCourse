@@ -7,17 +7,19 @@ from torchvision.transforms import ToTensor
 import utils
 from robotcar_dataset_sdk.image import load_image
 from robotcar_dataset_sdk.build_pointcloud import build_pointcloud
+import time
 
 
 class RobotCarDataset(Dataset):
-    def __init__(self, data_dir, structure_time_span, match_threshold):
-        self.samples_list , self.full_gps_df_rad = utils.build_samples_list(data_dir, structure_time_span)        
+    def __init__(self, data_dir, structure_time_span, match_threshold, super_batch_size, dataset_csv):
+        self.samples_df , self.camera_model_dict = utils.load_dataset(data_dir, structure_time_span, dataset_csv)
         self.extrinsics_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extrinsics")
         self.match_threshold = match_threshold
         self.to_tensor = ToTensor()
+        self.N = super_batch_size
 
     def __len__(self):
-        return len(self.samples_list)
+        return len(self.samples_df.index)
 
     def __getitem__(self, idx_i):
         Ii, Gi = self._load_sample(idx_i)
@@ -25,18 +27,21 @@ class RobotCarDataset(Dataset):
         match_idxs = self._calc_match_idxs(idx_i)
         if random.random() > 0.5:
             idx_j = self._get_match_idx(idx_i, match_idxs)
-            y = 1
+            Ij, Gj = self._load_sample(idx_j)
+            Ij = Ij.expand(self.N, *Ij.shape)
+            Gj = Gj.expand(self.N, *Gj.shape)
+            y = torch.ones(self.N)
         else:
             idx_j = self._get_non_match_idx(idx_i, match_idxs)
-            y = -1
-        
-        Ij, Gj = self._load_sample(idx_j)
+            Ij, Gj = self._load_multiple_samples(idx_j)
+            y = torch.ones(self.N) * -1
 
         return {'Ii': Ii, 'Gi': Gi, 'Ij': Ij, 'Gj': Gj, 'is_match': y}
-    
+
     def _load_sample(self, idx):
-        curr_sample = self.samples_list[idx]
-        I = load_image(curr_sample['I'], curr_sample['camera'])
+        curr_sample = self.samples_df.loc[idx]
+
+        I = load_image(curr_sample['image_path'], self.camera_model_dict[curr_sample['date']])
         I = (2 * self.to_tensor(I) - 1) / 2
         
         pointcloud, reflectance = build_pointcloud(curr_sample['lidar_dir'], curr_sample['poses_path'], 
@@ -45,9 +50,22 @@ class RobotCarDataset(Dataset):
         G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(pointcloud)).unsqueeze(0)
         
         return I, G
-    
+
+    def _load_multiple_samples(self, idxs):
+        I, G = None, None
+        for idx in idxs:
+            I_curr, G_curr = self._load_sample(idx)
+            I_curr, G_curr = I_curr.unsqueeze(0), G_curr.unsqueeze(0)
+            if I is None:
+                I, G = I_curr, G_curr
+            else:
+                I = torch.cat((I, I_curr), 0)
+                G = torch.cat((G, G_curr), 0)
+        
+        return I, G
+
     def _calc_match_idxs(self, idx):
-        Xi = self.samples_list[idx]
+        Xi = self.samples_df[idx]
         Xi_lat_long = np.array([Xi['latitude'], Xi['longitude']])
         Xi_lat_long_mat = np.tile(Xi_lat_long, (self.full_gps_df_rad.shape[0], 1))
         Xi_lat_long_mat_rad = np.array(list(map(np.radians, Xi_lat_long_mat)))
@@ -64,7 +82,7 @@ class RobotCarDataset(Dataset):
     def _get_match_idx(self, idx_i, match_idxs):
         while True:
             idx_j = random.choice(match_idxs)
-            if self.samples_list[idx_i]['date'] != self.samples_list[idx_j]['date']:
+            if self.samples_df[idx_i]['date'] != self.samples_df[idx_j]['date']:
                 break
             match_idxs = np.delete(match_idxs, np.where(match_idxs == idx_j))
         return idx_j
@@ -72,9 +90,5 @@ class RobotCarDataset(Dataset):
     def _get_non_match_idx(self, idx_i, match_idxs):
         non_matches_idxs = np.arange(self.__len__())
         non_matches_idxs = np.delete(non_matches_idxs, match_idxs)
-        while True:
-            # idx_j = random.randrange(self.__len__())
-            # None match, Random of N elements, run through net, return the lowest d(Xi,Xj)
-            if utils.is_match(self.samples_list[idx_i], self.samples_list[idx_j], self.match_threshold) == False:
-                break
-        return idx_j
+        super_batch = random.sample(non_matches_idxs, self.N)
+        return super_batch
