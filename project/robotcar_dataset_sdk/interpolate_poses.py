@@ -64,8 +64,8 @@ def interpolate_vo_poses(vo_path, pose_timestamps, origin_timestamp):
 
 def interpolate_ins_poses_new(ins_path, pose_timestamps, origin_timestamp, use_rtk=False):
     ins_df = pd.read_csv(ins_path, sep=',')
-    ins_timestamps = list(map(int,list(ins_df['timestamp'])))
-    xyzrpy = df[['northing', 'easting', 'down', 'roll', 'pitch', 'yaw']].to_numpy()
+    ins_timestamps = ins_df['timestamp'].to_numpy()
+    xyzrpy = ins_df[['northing', 'easting', 'down', 'roll', 'pitch', 'yaw']].to_numpy()
     abs_poses = build_se3_transform_new(xyzrpy)
     return interpolate_poses_new(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
 
@@ -82,7 +82,6 @@ def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=F
 
     """
     
-    # start = time.time()
     with open(ins_path) as ins_file:
         ins_reader = csv.reader(ins_file)
         headers = next(ins_file)
@@ -107,9 +106,8 @@ def interpolate_ins_poses(ins_path, pose_timestamps, origin_timestamp, use_rtk=F
 
     ins_timestamps = ins_timestamps[1:]
     abs_poses = abs_poses[1:]
-    to_return = interpolate_poses(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
-
-    return to_return
+    
+    return interpolate_poses(ins_timestamps, abs_poses, pose_timestamps, origin_timestamp)
 
 def interpolate_poses_new(pose_timestamps, abs_poses, requested_timestamps, origin_timestamp):
     requested_timestamps.insert(0, origin_timestamp)
@@ -118,9 +116,8 @@ def interpolate_poses_new(pose_timestamps, abs_poses, requested_timestamps, orig
     abs_quaternions = np.zeros((4, abs_poses.shape[0]))
     abs_positions = np.zeros((3, abs_poses.shape[0]))
     
-    # abs_quaternions = so3_to_quaternion_new(abs_poses[:, [:3, 4:7, 8:11]])
     abs_quaternions = so3_to_quaternion_new(abs_poses[:, [0,1,2,4,5,6,8,9,10]])
-    abs_positions = abs_poses[:, [3, 7, 11]]
+    abs_positions = abs_poses[:, [3, 7, 11]].transpose()
     
     upper_indices = [bisect.bisect(pose_timestamps, pt) for pt in requested_timestamps]
     lower_indices = [u - 1 for u in upper_indices]

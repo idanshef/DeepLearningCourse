@@ -41,17 +41,16 @@ def build_se3_transform(xyzrpy):
     return se3
 
 def build_se3_transform_new(xyzrpy):
-    se3 = np.zeros((len(xyzrpy.index),16))
-    # se3[:, [0:3,4:7,8:11]] = euler_to_so3_new(xyzrpy[3:])
-    se3[:, [0,1,2,4,5,6,8,9,10]] = euler_to_so3_new(xyzrpy[3:])
-    se3[:, [3,7,11]] = xyzrpy[:3]
+    se3 = np.zeros((xyzrpy.shape[0],16))
+    se3[:, [0,1,2,4,5,6,8,9,10]] = euler_to_so3_new(xyzrpy[:,3:])
+    se3[:, [3,7,11]] = xyzrpy[:,:3]
     return se3
 
 
 def euler_to_so3_new(rpy):
-    sin_0, cos_0 = np.sin(rpy[0]), np.cos(rpy[0])
-    sin_1, cos_1 = np.sin(rpy[1]), np.cos(rpy[1])
-    sin_2, cos_2 = np.sin(rpy[2]), np.cos(rpy[2])
+    sin_0, cos_0 = np.sin(rpy[:,0]), np.cos(rpy[:,0])
+    sin_1, cos_1 = np.sin(rpy[:,1]), np.cos(rpy[:,1])
+    sin_2, cos_2 = np.sin(rpy[:,2]), np.cos(rpy[:,2])
     
     R00 = cos_2 * cos_1
     R01 = -sin_2 * cos_0
@@ -137,8 +136,8 @@ def so3_to_quaternion_new(so3):
     R_zz = so3[:, 8]
     
 
-    so3_trace = R_xx + R_yy + Y_zz + 1
-    w=np.zeros(R_xx.shape[0],1)
+    so3_trace = R_xx + R_yy + R_zz + 1
+    w = np.zeros(R_xx.shape[0])
     w = np.sqrt(so3_trace, where=so3_trace>=0) / 2
     
     x = 1 + R_xx - R_yy - R_zz
@@ -153,7 +152,7 @@ def so3_to_quaternion_new(so3):
     z[z<0] = 0
     z = np.sqrt(z) / 2
 
-    max_indexes = np.argmax(np.stack([w,x,y,z]), axis=1)
+    max_indexes = np.argmax(np.stack([w,x,y,z]), axis=0)
     max_0 = np.where(max_indexes==0)[0]
     max_1 = np.where(max_indexes==1)[0]
     max_2 = np.where(max_indexes==2)[0]
