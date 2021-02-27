@@ -23,25 +23,48 @@ def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 4
     
     return voxel_grid
 
-def build_samples_list(data_dir, structure_time_span):
-    data_list = []
-    full_gps_df_rad = None
+def load_dataset(data_dir, structure_time_span, dataset_csv):
+    data_fields = ['date', 'lidar_dir', 'image_path', 'poses_path', 'start_time', 'end_time', 'latitude', 'longitude']
+    if dataset_csv is not None and os.path.exists(dataset_csv):
+        df = pd.read_csv(dataset_csv, sep='\t')
+    else:
+        df = build_samples_df(data_dir, structure_time_span, data_fields)
+        if dataset_csv is not None:
+            df.to_csv(dataset_csv, sep='\t')
+    
+    camera_model_dict = dict()
     for data_date in os.listdir(data_dir):
+        date_path = os.path.join(data_dir, data_date)
+        img_dir = os.path.join(date_path, 'stereo', 'centre')
+        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+        camera_model_dict[data_date] = CameraModel(models_dir, img_dir)
+    
+    return df, camera_model_dict
+
+def is_match(Xi, Xj, threshold_m):
+    Xi_lat_long = (Xi['latitude'], Xi['longitude'])
+    Xj_lat_long = (Xj['latitude'], Xj['longitude'])
+    return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m
+
+
+def build_samples_df(data_dir, structure_time_span, fields):
+    df = pd.DataFrame(columns=fields)
+    for _, data_dates, _ in os.walk(data_dir):
+        data_dates = data_dates
+        break
+    
+    for data_date in data_dates:
         date_path = os.path.join(data_dir, data_date)
         lidar_dir = os.path.join(date_path, 'ldmrs')
         img_dir = os.path.join(date_path, 'stereo', 'centre')
         poses_file_path = os.path.join(date_path, "gps", "ins.csv")
         gps_df = pd.read_csv(poses_file_path)
         
-        models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-        camera_model = CameraModel(models_dir, img_dir)
-        
         for img_name in os.listdir(img_dir):
             data_dict = dict()
             data_dict['date'] = data_date
             data_dict['lidar_dir'] = lidar_dir
-            data_dict['camera'] = camera_model
-            data_dict['I'] = os.path.join(img_dir, img_name)
+            data_dict['image_path'] = os.path.join(img_dir, img_name)
             data_dict['poses_path'] = poses_file_path
             
             img_timestamp = int(img_name[:-4])
@@ -52,17 +75,6 @@ def build_samples_list(data_dir, structure_time_span):
             data_dict['latitude'] = gps_df['latitude'][closest_time_idx]
             data_dict['longitude'] = gps_df['longitude'][closest_time_idx]
 
-            data_list.append(data_dict)
-            
-            curr_lat_long = np.array([list(map(np.radians, [data_dict['latitude'], data_dict['longitude']]))])
-            if full_gps_df_rad is None:
-                full_gps_df_rad = curr_lat_long
-            else:
-                full_gps_df_rad = np.concatenate((full_gps_df_rad, curr_lat_long))
-    
-    return data_list, full_gps_df_rad
+            df = df.append(data_dict, ignore_index=True)
 
-def is_match(Xi, Xj, threshold_m):
-    Xi_lat_long = (Xi['latitude'], Xi['longitude'])
-    Xj_lat_long = (Xj['latitude'], Xj['longitude'])
-    return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m
+    return df
