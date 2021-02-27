@@ -23,7 +23,7 @@ class RobotCarDataset(Dataset):
         return len(self.samples_df.index)
 
     def __getitem__(self, idx_i):
-        Ii, Gi = self._load_sample(idx_i)
+        Ii, Gi = self._load_sample(idx_i) # TODO: without hood
         
         match_idxs = self._calc_match_idxs(idx_i)
         if random.random() > 0.5:
@@ -83,7 +83,7 @@ class RobotCarDataset(Dataset):
     def _get_match_idx(self, idx_i, match_idxs):
         while True:
             idx_j = random.choice(match_idxs)
-            if self.samples_df[idx_i]['date'] != self.samples_df[idx_j]['date']:
+            if self.samples_df.loc[idx_i]['date'] != self.samples_df.loc[idx_j]['date']:
                 break
             match_idxs = np.delete(match_idxs, np.where(match_idxs == idx_j))
         return idx_j
