@@ -13,6 +13,7 @@ import time
 class RobotCarDataset(Dataset):
     def __init__(self, data_dir, structure_time_span, match_threshold, super_batch_size, dataset_csv):
         self.samples_df , self.camera_model_dict = utils.load_dataset(data_dir, structure_time_span, dataset_csv)
+        self.full_gps_df_rad = np.radians(self.samples_df[['latitude', 'longitude']].to_numpy())
         self.extrinsics_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extrinsics")
         self.match_threshold = match_threshold
         self.to_tensor = ToTensor()
@@ -65,7 +66,7 @@ class RobotCarDataset(Dataset):
         return I, G
 
     def _calc_match_idxs(self, idx):
-        Xi = self.samples_df[idx]
+        Xi = self.samples_df.loc[idx]
         Xi_lat_long = np.array([Xi['latitude'], Xi['longitude']])
         Xi_lat_long_mat = np.tile(Xi_lat_long, (self.full_gps_df_rad.shape[0], 1))
         Xi_lat_long_mat_rad = np.array(list(map(np.radians, Xi_lat_long_mat)))
@@ -90,5 +91,5 @@ class RobotCarDataset(Dataset):
     def _get_non_match_idx(self, idx_i, match_idxs):
         non_matches_idxs = np.arange(self.__len__())
         non_matches_idxs = np.delete(non_matches_idxs, match_idxs)
-        super_batch = random.sample(non_matches_idxs, self.N)
+        super_batch = random.sample(list(non_matches_idxs), self.N)
         return super_batch
