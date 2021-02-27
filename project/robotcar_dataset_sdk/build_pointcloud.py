@@ -16,6 +16,7 @@ import os
 import re
 import numpy as np
 import time
+# import open3d
 
 from .transform import build_se3_transform
 from .interpolate_poses import interpolate_vo_poses, interpolate_ins_poses, interpolate_ins_poses_new
@@ -54,7 +55,7 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
             timestamp = int(line.split(' ')[0])
             if start_time <= timestamp <= end_time:
                 timestamps.append(timestamp)
-
+    
     if len(timestamps) == 0:
         raise ValueError("No LIDAR data in the given time bracket.")
 
@@ -68,12 +69,12 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
     if poses_type in ['ins', 'rtk']:
         with open(os.path.join(extrinsics_dir, 'ins.txt')) as extrinsics_file:
             extrinsics = next(extrinsics_file)
-            start = time.time()
             G_posesource_laser = np.linalg.solve(build_se3_transform([float(x) for x in extrinsics.split(' ')]),
                                                  G_posesource_laser)
             
         # poses = interpolate_ins_poses(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
         poses = interpolate_ins_poses_new(poses_file, timestamps, origin_time, use_rtk=(poses_type == 'rtk'))
+        
     else:
         # sensor is VO, which is located at the main vehicle frame
         poses = interpolate_vo_poses(poses_file, timestamps, origin_time)
@@ -84,7 +85,6 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
     else:
         reflectance = np.empty((0))
 
-    start = time.time()
     for i in range(0, len(poses)):
         scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
         if "velodyne" not in lidar:
@@ -116,8 +116,6 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time
 
         scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
         pointcloud = np.hstack([pointcloud, scan])
-    end = time.time()
-    print(f"for loop: {end-start}")
 
     pointcloud = pointcloud[:, 1:]
     if pointcloud.shape[1] == 0:
@@ -152,25 +150,27 @@ if __name__ == "__main__":
         colours = (reflectance - reflectance.min()) / (reflectance.max() - reflectance.min())
         colours = 1 / (1 + np.exp(-10 * (colours - colours.mean())))
     else:
-        colours = 'gray'
+        # colours = 'gray'
+        colours = np.array([0.5, 0.5, 0.5])
 
     # Pointcloud Visualisation using Open3D
-    vis = open3d.Visualizer()
-    vis.create_window(window_name=os.path.basename(__file__))
-    render_option = vis.get_render_option()
-    render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
-    render_option.point_color_option = open3d.PointColorOption.ZCoordinate
-    coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
-    vis.add_geometry(coordinate_frame)
+    # vis = open3d.Visualizer()
+    # vis.create_window(window_name=os.path.basename(__file__))
+    # render_option = vis.get_render_option()
+    # render_option.background_color = np.array([0.1529, 0.1569, 0.1333], np.float32)
+    # render_option.point_color_option = open3d.PointColorOption.ZCoordinate
+    # coordinate_frame = open3d.geometry.create_mesh_coordinate_frame()
+    # vis.add_geometry(coordinate_frame)
     pcd = open3d.geometry.PointCloud()
     pcd.points = open3d.utility.Vector3dVector(
         -np.ascontiguousarray(pointcloud[[1, 0, 2]].transpose().astype(np.float64)))
     pcd.colors = open3d.utility.Vector3dVector(np.tile(colours[:, np.newaxis], (1, 3)).astype(np.float64))
     # Rotate pointcloud to align displayed coordinate frame colouring
     pcd.transform(build_se3_transform([0, 0, 0, np.pi, 0, -np.pi / 2]))
-    vis.add_geometry(pcd)
-    view_control = vis.get_view_control()
-    params = view_control.convert_to_pinhole_camera_parameters()
-    params.extrinsic = build_se3_transform([0, 3, 10, 0, -np.pi * 0.42, -np.pi / 2])
-    view_control.convert_from_pinhole_camera_parameters(params)
-    vis.run()
+    # open3d.io.write_point_cloud(r"/media/idansheffer/multi_view_hd/DeepLearning/point_cloud.ply", pcd)
+    # vis.add_geometry(pcd)
+    # view_control = vis.get_view_control()
+    # params = view_control.convert_to_pinhole_camera_parameters()
+    # params.extrinsic = build_se3_transform([0, 3, 10, 0, -np.pi * 0.42, -np.pi / 2])
+    # view_control.convert_from_pinhole_camera_parameters(params)
+    # vis.run()
