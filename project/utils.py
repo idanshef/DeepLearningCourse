@@ -24,9 +24,10 @@ def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 4
     return voxel_grid
 
 def load_dataset(data_dir, structure_time_span, dataset_csv):
-    data_fields = ['date', 'lidar_dir', 'image_path', 'poses_path', 'start_time', 'end_time', 'latitude', 'longitude']
+    # data_fields = ['date', 'lidar_dir', 'image_path', 'poses_path', 'start_time', 'end_time', 'latitude', 'longitude']
+    data_fields = ['date', 'lidar_dir', 'image_path', 'poses_path', 'timestamps', 'latitude', 'longitude']
     if dataset_csv is not None and os.path.exists(dataset_csv):
-        df = pd.read_csv(dataset_csv, sep=',')
+        df = pd.read_csv(dataset_csv, sep=',', converters={"timestamps": lambda x: list(map(int, x.strip("[]").replace("'","").split(", ")))})
     else:
         df = build_samples_df(data_dir, structure_time_span, data_fields)
         if dataset_csv is not None:
@@ -39,7 +40,8 @@ def load_dataset(data_dir, structure_time_span, dataset_csv):
         models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
         camera_model_dict[data_date] = CameraModel(models_dir, img_dir)
     
-    return df[df[['start_time', 'end_time']].notnull().all(1)].reset_index(), camera_model_dict
+    # return df[df[['start_time', 'end_time']].notnull().all(1)].reset_index(), camera_model_dict
+    return df[df['timestamps'].str.len()>1].reset_index(), camera_model_dict
 
 def is_match(Xi, Xj, threshold_m):
     Xi_lat_long = (Xi['latitude'], Xi['longitude'])
@@ -70,9 +72,10 @@ def build_samples_df(data_dir, structure_time_span, fields):
             data_dict['poses_path'] = poses_file_path
             
             img_timestamp = int(img_name[:-4])
-            matching_timestamps = lidar_timestamps[abs(lidar_timestamps-img_timestamp) <= round(structure_time_span/2) * 1e6]
-            data_dict['start_time'] = min(matching_timestamps) if len(matching_timestamps) > 0 else np.nan
-            data_dict['end_time'] = max(matching_timestamps) if (len(matching_timestamps) > 0 and max(matching_timestamps) != min(matching_timestamps)) else np.nan
+            matching_timestamps = list(lidar_timestamps[abs(lidar_timestamps-img_timestamp) <= round(structure_time_span/2) * 1e6])
+            data_dict['timestamps'] = matching_timestamps if len(matching_timestamps)>4 else [0]
+            # data_dict['start_time'] = min(matching_timestamps) if len(matching_timestamps) > 0 else np.nan
+            # data_dict['end_time'] = max(matching_timestamps) if (len(matching_timestamps) > 0 and max(matching_timestamps) != min(matching_timestamps)) else np.nan
             
             closest_time_idx = abs(gps_df['timestamp'] - img_timestamp).argmin()
             data_dict['latitude'] = gps_df['latitude'][closest_time_idx]

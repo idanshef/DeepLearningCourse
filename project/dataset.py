@@ -7,7 +7,6 @@ from torchvision.transforms import ToTensor
 import utils
 from robotcar_dataset_sdk.image import load_image
 from robotcar_dataset_sdk.build_pointcloud import build_pointcloud
-import time
 
 
 class RobotCarDataset(Dataset):
@@ -44,9 +43,11 @@ class RobotCarDataset(Dataset):
 
         I = load_image(curr_sample['image_path'], self.camera_model_dict[curr_sample['date']])
         I = (2 * self.to_tensor(I) - 1) / 2
-        
+
+        # pointcloud, reflectance = build_pointcloud(curr_sample['lidar_dir'], curr_sample['poses_path'], 
+        #                                            self.extrinsics_dir, curr_sample['start_time'], curr_sample['end_time'])
         pointcloud, reflectance = build_pointcloud(curr_sample['lidar_dir'], curr_sample['poses_path'], 
-                                                   self.extrinsics_dir, curr_sample['start_time'], curr_sample['end_time'])
+                                                   self.extrinsics_dir, curr_sample['timestamps'])
         pointcloud = np.array(pointcloud[:-1]).transpose()
         G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(pointcloud)).unsqueeze(0)
         

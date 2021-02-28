@@ -18,7 +18,6 @@ import numpy as np
 import pandas as pd
 import numpy.matlib as ml
 from .transform import *
-import time
 
 
 def interpolate_vo_poses(vo_path, pose_timestamps, origin_timestamp):
