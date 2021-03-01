@@ -8,6 +8,7 @@ from net_models import *
 from dataset import RobotCarDataset
 from math import floor
 import utils
+import numpy as np
 
 
 def init_data(data_dir, dataset_csv, val_percent, structure_time_span, match_threshold):
@@ -34,21 +35,27 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
         pred_descriptors_k = None
         
         for i in range(floor(k/batch_size)):
-            curr_samples = samples_idxs[i*batch_size:(i+1)*batch_size] if i!=floor(k/batch_size)-1 else samples_idxs[i*batch_size:]
-            I_curr = I_k[curr_samples].to(device=device, dtype=torch.float32)
-            G_curr = G_k[curr_samples].to(device=device, dtype=torch.float32)
+            if i!=floor(k/batch_size)-1:
+                curr_samples = list(np.arange(i*batch_size, (i+1)*batch_size))
+            else:
+                curr_samples = list(np.arange(i*batch_size, k))
+            dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, curr_samples)
+            I, G = dataset_i.get_items()
+            
+            I = I.to(device=device, dtype=torch.float32)
+            G = G.to(device=device, dtype=torch.float32)
             
             with torch.no_grad():
-                pred_descriptors_curr = model(I_curr, G_curr)
-            pred_descriptors_curr = pred_descriptors_curr.to(device='cpu', dtype=torch.float32)
+                pred_descriptors_i = model(I, G)
+            pred_descriptors_i = pred_descriptors_i.to(device='cpu', dtype=torch.float32)
             
             if pred_descriptors_k is None:
-                pred_descriptors_k = pred_descriptors_curr.detach().clone()
+                pred_descriptors_k = pred_descriptors_i.detach().clone()
             else:
-                pred_descriptors_k = torch.cat((pred_descriptors_k, pred_descriptors_curr), dim=0)
-            
-        descriptor_size = pred_descriptors_k.shape[0]
-        repeat_pred = pred_descriptors_k.view(-1,1).repeat(1,k).view(descriptor_size,-1)
+                pred_descriptors_k = torch.cat((pred_descriptors_k, pred_descriptors_i), dim=0)
+        
+        descriptor_size = pred_descriptors_k.shape[1]
+        repeat_pred = pred_descriptors_k.repeat(1,k).view(-1,descriptor_size)
         d_L1 = torch.sum(torch.abs(repeat_pred - pred_descriptors_k.repeat(1,k)), dim=0).view(k,-1)
         d_L1[torch.tril(torch.ones(d_L1.shape),diagonal=-1)==0] = torch.finfo(torch.float32).max
         

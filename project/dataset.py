@@ -45,6 +45,20 @@ class RobotCarDataset(Dataset):
         non_matches_idxs = remove_idx(non_matches_idxs)
         return matches_idxs, non_matches_idxs
 
+    def get_items(self):
+        I, G = None, None
+        for i in range(len(self.samples_df.index)):
+            Ii, Gi = self._load_sample(i)
+            Ii, Gi = Ii.unsqueeze(0), Gi.unsqueeze(0)
+            
+            if I is None:
+                I = Ii.detach().clone()
+                G = Gi.detach().clone()
+            else:
+                I = torch.cat((I, Ii), dim=0)
+                G = torch.cat((G, Gi), dim=0)
+        return I, G
+
     def get_item(self, idx_i):
         Ii, Gi = self._load_sample(idx_i)
         
@@ -76,7 +90,7 @@ class RobotCarDataset(Dataset):
         G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(pointcloud)).unsqueeze(0)
 
         return I, G
-
+    
     def _load_multiple_samples(self, idxs):
         I, G = None, None
         for idx in idxs:
