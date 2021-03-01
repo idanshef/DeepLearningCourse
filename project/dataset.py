@@ -17,6 +17,11 @@ class RobotCarDataset(Dataset):
         self.extrinsics_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extrinsics")
         self.match_threshold = match_threshold
         self.to_tensor = ToTensor()
+    
+    @classmethod
+    def subset_of_dataset(cls, dataset, idxs):
+        return cls(dataset.samples_df.iloc[idxs, :].reset_index(drop=True), 
+                   dataset.camera_model_dict, dataset.match_threshold)
 
     def calc_match_idxs(self, idx):
         Xi = self.samples_df.loc[idx]
@@ -24,7 +29,7 @@ class RobotCarDataset(Dataset):
         Xi_lat_long_mat = np.tile(Xi_lat_long, (self.gps_lat_long_rad.shape[0], 1))
         Xi_lat_long_mat_rad = np.array(list(map(np.radians, Xi_lat_long_mat)))
         
-        lat1, lon1 = lat_long_rad[:, 0], lat_long_rad[:, 1]
+        lat1, lon1 = self.gps_lat_long_rad[:, 0], self.gps_lat_long_rad[:, 1]
         lat2, lon2 = Xi_lat_long_mat_rad[:, 0], Xi_lat_long_mat_rad[:, 1]
         dlon = lon2 - lon1
         dlat = lat2 - lat1
@@ -33,9 +38,9 @@ class RobotCarDataset(Dataset):
         
         matches_bool = distance_m <= self.match_threshold
         matches_idxs = np.where(matches_bool)[0]
-        non_matches_idxs = np.where(not matches_bool)[0]
+        non_matches_idxs = np.where(matches_bool==False)[0]
         
-        remove_idx = lambda idxs: np.delete(idxs, idx)
+        remove_idx = lambda idxs: idxs[idxs != idx]
         matches_idxs = remove_idx(matches_idxs)
         non_matches_idxs = remove_idx(non_matches_idxs)
         return matches_idxs, non_matches_idxs

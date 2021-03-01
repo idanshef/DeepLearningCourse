@@ -6,18 +6,19 @@ from torch import optim
 from torch.utils.data import DataLoader, random_split
 from net_models import *
 from dataset import RobotCarDataset
-import time
+from math import floor
+import utils
 
 
 def init_data(data_dir, dataset_csv, val_percent, structure_time_span, match_threshold):
-    dataset = create_dataset(data_dir, structure_time_span, dataset_csv)
-    cameras = load_cameras(data_dir)
+    dataset_df = utils.create_dataset_df(data_dir, structure_time_span, dataset_csv)
+    cameras = utils.load_cameras(data_dir)
     
-    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(dataset, val_percent/100)
-    select_dataset = lambda set_idxs: dataset.iloc[set_idxs, :].reset_index()
+    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(dataset_df, val_percent/100)
+    select_subset_df = lambda set_idxs: dataset_df.iloc[set_idxs, :].reset_index()
     
-    return {'val': RobotCarDataset(select_dataset(val_idxs), cameras, match_threshold),
-            'train': RobotCarDataset(select_dataset(train_idxs), cameras, match_threshold)}
+    return {'val': RobotCarDataset(select_subset_df(val_idxs), cameras, match_threshold),
+            'train': RobotCarDataset(select_subset_df(train_idxs), cameras, match_threshold)}
 
 
 def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k):
@@ -28,7 +29,7 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
         model.train()
         epoch_loss = 0
         
-        dataset_k = utils.select_samples(dataset_dict['train'], k)
+        dataset_k = RobotCarDataset.subset_of_dataset(dataset_dict['train'], utils.select_samples(dataset_dict['train'], k))
         
         pred_descriptors_k = None
         
@@ -146,7 +147,7 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
 if __name__ == "__main__":
     
     data_dir = r"/media/idansheffer/multi_view_hd/DeepLearning/data2"
-    dataset_path = os.path.join(data_dir,'dataset.csv')
+    dataset_path = os.path.join(data_dir,'dataset_2_timestamps.csv')
     structure_time_span=2
     match_threshold=5
     batch_size = 10
@@ -162,7 +163,7 @@ if __name__ == "__main__":
     optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
     dataset_dict = init_data(data_dir, dataset_path, val_percent, structure_time_span, match_threshold)
-    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device)
+    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k)
 
     # weights_path = f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt"
     # if not os.path.isdir(net_weights_dir):

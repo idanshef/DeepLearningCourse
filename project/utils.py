@@ -1,11 +1,12 @@
 import os
+import random
 import numpy as np
 import pandas as pd
 from geopy.distance import distance
 from robotcar_dataset_sdk.camera_model import CameraModel
 
 
-def create_dataset(data_dir, structure_time_span, dataset_csv):
+def create_dataset_df(data_dir, structure_time_span, dataset_csv):
     data_fields = ['date', 'lidar_dir', 'image_path', 'poses_path', 'timestamps', 'latitude', 'longitude']
     if dataset_csv is not None and os.path.exists(dataset_csv):
         df = pd.read_csv(dataset_csv, sep=',', converters={"timestamps": lambda x: list(map(int, x.strip("[]").replace("'","").split(", ")))})
@@ -58,6 +59,8 @@ def build_samples_df(data_dir, structure_time_span, fields):
 def load_cameras(data_dir):
     camera_model_dict = dict()
     for data_date in os.listdir(data_dir):
+        if os.path.isfile(os.path.join(data_dir, data_date)):
+            continue
         date_path = os.path.join(data_dir, data_date)
         img_dir = os.path.join(date_path, 'stereo', 'centre')
         models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
@@ -71,24 +74,25 @@ def split_idxs_to_train_val_idxs(dataset, val_percent):
     num_val = int(len(dataset) * val_percent)
     idxs_list = dataset.index.values
     val_set_idxs = random.sample(list(dataset.index.values), num_val)
-    train_set_idxs = [val for val in idxs_list if val not in val_set_idxs]
+    train_set_idxs = np.delete(idxs_list, val_set_idxs)
     return train_set_idxs, val_set_idxs
 
 
 def select_samples(dataset, k):
     if k % 2 == 0:
-        random_idxs = random.sample(dataset.index.values, k/2)
+        random_idxs = random.sample(list(dataset.samples_df.index.values), int(k/2))
         odd_even_idx = -1
     else:
         random_idxs = random.sample(dataset.index.values, floor(k/2) + 1)
         odd_even_idx = random_idxs[-1]
         random_idxs = random_idxs[:-1]
         
-    samples_idxs = []
-    is_pos_sample = False
+    samples_idxs = random_idxs.copy()
     for i in random_idxs:
         if random.random() > 0.5:
             is_pos_sample = True
+        else:
+            is_pos_sample = False
         
         matches_idxs, non_matches_idxs = dataset.calc_match_idxs(i)
         while True:
@@ -104,19 +108,18 @@ def select_samples(dataset, k):
                     samples_idxs.append(idx_j)
                     break
                 else:
-                    matches_idxs = np.delete(matches_idxs, idx_j)
+                    matches_idxs = matches_idxs[np.where(matches_idxs!=idx_j)]
             if not is_pos_sample:
                 idx_j = choose_random(non_matches_idxs)
                 if idx_j not in samples_idxs:
                     samples_idxs.append(idx_j)
                     break
                 else:
-                    non_matches_idxs = np.delete(non_matches_idxs, idx_j)
+                    non_matches_idxs = non_matches_idxs[np.where(non_matches_idxs!=idx_j)]
     if odd_even_idx >= 0:
         samples_idxs.append(odd_even_idx)
     
-    return RobotCarDataset(dataset.samples_df.iloc[samples_idxs, :].reset_index(), 
-                           dataset.cameras_model, dataset.match_threshold)
+    return samples_idxs
     
 
 def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 48), volume_size = (40, 40, 20)):
@@ -138,7 +141,7 @@ def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 4
     return voxel_grid
 
 
-def is_match(Xi, Xj, threshold_m):
-    Xi_lat_long = (Xi['latitude'], Xi['longitude'])
-    Xj_lat_long = (Xj['latitude'], Xj['longitude'])
-    return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m
+# def is_match(Xi, Xj, threshold_m):
+#     Xi_lat_long = (Xi['latitude'], Xi['longitude'])
+#     Xj_lat_long = (Xj['latitude'], Xj['longitude'])
+#     return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m
