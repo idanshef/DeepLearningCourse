@@ -15,14 +15,13 @@
 import os
 import re
 import numpy as np
-import time
-# import open3d
 
 from .transform import build_se3_transform
 from .interpolate_poses import interpolate_vo_poses, interpolate_ins_poses, interpolate_ins_poses_new
 from .velodyne import load_velodyne_raw, load_velodyne_binary, velodyne_raw_to_pointcloud
 
 
+# def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, start_time, end_time, origin_time=-1):
 def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, timestamps, origin_time=-1):
     """Builds a pointcloud by combining multiple LIDAR scans with odometry information.
 
@@ -43,33 +42,20 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, timestamps, origin_t
         IOError: if scan files are not found.
 
     """
-    start=time.time()
     if origin_time < 0:
         origin_time = min(timestamps)
 
-    lidar = re.search('(lms_front|lms_rear|ldmrs|velodyne_left|velodyne_right)', lidar_dir).group(0)
-    # timestamps_path = os.path.join(lidar_dir, os.pardir, lidar + '.timestamps')
-
-    # timestamps = []
-    # with open(timestamps_path) as timestamps_file:
-    #     for line in timestamps_file:
-    #         timestamp = int(line.split(' ')[0])
-    #         if start_time <= timestamp <= end_time:
-    #             timestamps.append(timestamp)
-    
+    lidar = re.search('(lms_front|lms_rear|ldmrs|velodyne_left|velodyne_right)', lidar_dir).group(0)   
     
     if len(timestamps) == 0:
         raise ValueError("No LIDAR data in the given time bracket.")
     
-    start_extrinsics=time.time()
     with open(os.path.join(extrinsics_dir, lidar + '.txt')) as extrinsics_file:
         extrinsics = next(extrinsics_file)
     G_posesource_laser = build_se3_transform([float(x) for x in extrinsics.split(' ')])
-    end_extrinsics=time.time()
 
     poses_type = re.search('(vo|ins|rtk)\.csv', poses_file).group(1)
 
-    start_interpolate=time.time()
     if poses_type in ['ins', 'rtk']:
         with open(os.path.join(extrinsics_dir, 'ins.txt')) as extrinsics_file:
             extrinsics = next(extrinsics_file)
@@ -82,14 +68,13 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, timestamps, origin_t
     else:
         # sensor is VO, which is located at the main vehicle frame
         poses = interpolate_vo_poses(poses_file, timestamps, origin_time)
-    end_interpolate=time.time()
 
     pointcloud = np.array([[0], [0], [0], [0]])
     if lidar == 'ldmrs':
         reflectance = None
     else:
         reflectance = np.empty((0))
-    start_loop=time.time()
+
     for i in range(0, len(poses)):
         scan_path = os.path.join(lidar_dir, str(timestamps[i]) + '.bin')
         if "velodyne" not in lidar:
@@ -121,13 +106,10 @@ def build_pointcloud(lidar_dir, poses_file, extrinsics_dir, timestamps, origin_t
 
         scan = np.dot(np.dot(poses[i], G_posesource_laser), np.vstack([scan, np.ones((1, scan.shape[1]))]))
         pointcloud = np.hstack([pointcloud, scan])
-    end_loop=time.time()
 
     pointcloud = pointcloud[:, 1:]
     if pointcloud.shape[1] == 0:
         raise IOError("Could not find scan files for given time range in directory " + lidar_dir)
-    end=time.time()
-    print(f"total: {end-start}, timestamps: {100*(end_timestamps-start_timestamps)/(end-start)} %, extrinsics: {100*(end_extrinsics-start_extrinsics)/(end-start)} %, interpolate: {100*(end_interpolate-start_interpolate)/(end-start)} %, loop: {100*(end_loop-start_loop)/(end-start)} %")
 
     return pointcloud, reflectance
 
