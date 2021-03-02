@@ -128,3 +128,27 @@ class FusionNet(nn.Module):
     
     def forward(self, I, G):
         return torch.cat((I, G), 1)
+
+class MarginBasedLoss(nn.Module):
+    def __init__(self, alpha, m, norm_type=1, reduction='mean'):
+        super(MarginBasedLoss, self).__init__()
+        self.alpha = alpha
+        self.m = m
+        self.norm_type = norm_type
+        assert reduction is None or reduction in ['mean', 'sum'], "Invalid reduction value!"
+        self.reduction = reduction
+    
+    def forward(self, f1, f2, labels):
+        assert len(f1.shape) == len(f2.shape) == 2, "f1 and f2 must be 2d matrices"
+        assert f1.shape[0] == f2.shape[0], "f1 and f2 batch dimension must be equal"
+        assert f1.shape[0] == labels.shape[0], "input features batch dimension and number of labels must be equal"
+        assert len(labels.shape) == 1, "labels must be a one-dim vector"
+        
+        loss = torch.max(self.alpha + labels.float() * (torch.linalg.norm(f1 - f2, dim=-1, ord=self.norm_type) - self.m),
+                         torch.tensor([0.], device=f1.device))
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        return loss
+            

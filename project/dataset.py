@@ -2,6 +2,7 @@ import os
 import torch
 import random
 import numpy as np
+import cv2
 from torch.utils.data import Dataset
 from torchvision.transforms import ToTensor
 import utils
@@ -63,8 +64,8 @@ class RobotCarDataset(Dataset):
             Ii, Gi = Ii.unsqueeze(0), Gi.unsqueeze(0)
             
             if I is None:
-                I = Ii.detach().clone()
-                G = Gi.detach().clone()
+                I = Ii.clone()
+                G = Gi.clone()
             else:
                 I = torch.cat((I, Ii), dim=0)
                 G = torch.cat((G, Gi), dim=0)
@@ -74,7 +75,7 @@ class RobotCarDataset(Dataset):
     def _load_sample(self, idx):
         curr_sample = self.samples_df.loc[idx]
 
-        I = load_image(curr_sample['image_path'], self.camera_model_dict[curr_sample['date']])[:600,:,:]
+        I = cv2.resize(load_image(curr_sample['image_path'], self.camera_model_dict[curr_sample['date']])[:600,:,:], (640,300), interpolation=cv2.INTER_CUBIC)
         I = (2 * self.to_tensor(I) - 1) / 2
 
         pointcloud, reflectance = build_pointcloud(curr_sample['lidar_dir'], curr_sample['poses_path'], 
