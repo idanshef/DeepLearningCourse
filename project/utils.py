@@ -2,7 +2,6 @@ import os
 import random
 import numpy as np
 import pandas as pd
-from geopy.distance import distance
 from robotcar_dataset_sdk.camera_model import CameraModel
 
 
@@ -18,7 +17,6 @@ def create_dataset_df(data_dir, structure_time_span, dataset_csv):
     # TODO: filter data
     df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
     df = df[df['timestamps'].str.len()>1].reset_index()
-    
     return df
 
 
@@ -53,8 +51,8 @@ def build_samples_df(data_dir, structure_time_span, fields):
             data_dict['longitude'] = gps_df['longitude'][closest_time_idx]
 
             df = df.append(data_dict, ignore_index=True)
-
     return df
+
 
 def load_cameras(data_dir):
     camera_model_dict = dict()
@@ -78,49 +76,29 @@ def split_idxs_to_train_val_idxs(dataset, val_percent):
     return train_set_idxs, val_set_idxs
 
 
-def select_samples(dataset, k):
-    if k % 2 == 0:
-        random_idxs = random.sample(list(dataset.samples_df.index.values), int(k/2))
-        odd_even_idx = -1
-    else:
-        random_idxs = random.sample(dataset.index.values, floor(k/2) + 1)
-        odd_even_idx = random_idxs[-1]
-        random_idxs = random_idxs[:-1]
-        
-    samples_idxs = random_idxs.copy()
-    for i in random_idxs:
-        if random.random() > 0.5:
-            is_pos_sample = True
+def split_data_to_n_groups_size_k(dataset, n, k):
+    dataset_idxs = list(dataset.samples_df.index.values)
+    samples_groups = []
+    for i in range(n):
+        if k % 2 == 0:
+            group_idxs = random.sample(dataset_idxs, int(k/2))
+            odd_even_idx = -1
         else:
-            is_pos_sample = False
+            group_idxs = random.sample(dataset_idxs, int(k/2) + 1)
+            odd_even_idx = group_idxs[-1]
+            group_idxs = group_idxs[:-1]
         
-        matches_idxs, non_matches_idxs = dataset.calc_match_idxs(i)
-        while True:
-            if len(matches_idxs) == 0:
-                is_pos_sample = False
-            if len(non_matches_idxs) == 0:
-                is_pos_sample = True
-            
-            choose_random = lambda idxs: random.choice(idxs)
-            if is_pos_sample:
-                idx_j = choose_random(matches_idxs)
-                if idx_j not in samples_idxs:
-                    samples_idxs.append(idx_j)
-                    break
-                else:
-                    matches_idxs = matches_idxs[np.where(matches_idxs!=idx_j)]
-            if not is_pos_sample:
-                idx_j = choose_random(non_matches_idxs)
-                if idx_j not in samples_idxs:
-                    samples_idxs.append(idx_j)
-                    break
-                else:
-                    non_matches_idxs = non_matches_idxs[np.where(non_matches_idxs!=idx_j)]
-    if odd_even_idx >= 0:
-        samples_idxs.append(odd_even_idx)
+        matches_idxs, non_matches_idxs = dataset.calc_matches_idxs(group_idxs)
+        is_match = [random.random() > 0.5 for val in range(int(k/2))]
+        for j in range(int(k/2)):
+            group_idxs.append(random.choice(matches_idxs[j])) if is_match[j] else group_idxs.append(random.choice(non_matches_idxs[j]))
+        
+        if odd_even_idx >= 0:
+            group_idxs.append(odd_even_idx)
+        samples_groups.append(group_idxs)
     
-    return samples_idxs
-    
+    return samples_groups
+
 
 def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 48), volume_size = (40, 40, 20)):
     center_m = np.zeros(3)
@@ -139,9 +117,3 @@ def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 4
     np.add.at(voxel_grid, tuple(points_axis.T), 1)
     
     return voxel_grid
-
-
-# def is_match(Xi, Xj, threshold_m):
-#     Xi_lat_long = (Xi['latitude'], Xi['longitude'])
-#     Xj_lat_long = (Xj['latitude'], Xj['longitude'])
-#     return distance(Xi_lat_long, Xj_lat_long).m <= threshold_m

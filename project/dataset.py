@@ -23,27 +23,38 @@ class RobotCarDataset(Dataset):
         return cls(dataset.samples_df.iloc[idxs, :].reset_index(drop=True), 
                    dataset.camera_model_dict, dataset.match_threshold)
 
-    def calc_match_idxs(self, idx):
-        Xi = self.samples_df.loc[idx]
-        Xi_lat_long = np.array([Xi['latitude'], Xi['longitude']])
-        Xi_lat_long_mat = np.tile(Xi_lat_long, (self.gps_lat_long_rad.shape[0], 1))
-        Xi_lat_long_mat_rad = np.array(list(map(np.radians, Xi_lat_long_mat)))
+    def calc_matches_idxs(self, idxs):
+        subset_gps_mat = self.gps_lat_long_rad[idxs, :]
+        subset_repeat = subset_gps_mat.repeat(self.gps_lat_long_rad.shape[0], axis=0)
+        tile_gps_mat = np.tile(self.gps_lat_long_rad, (len(idxs),1))
         
-        lat1, lon1 = self.gps_lat_long_rad[:, 0], self.gps_lat_long_rad[:, 1]
-        lat2, lon2 = Xi_lat_long_mat_rad[:, 0], Xi_lat_long_mat_rad[:, 1]
+        matches_bool = self._calc_matches_bool(subset_repeat, tile_gps_mat).reshape(len(idxs), -1)
+        matches_rows, matches_cols = np.where(matches_bool)
+        non_matches_rows, non_matches_cols = np.where(matches_bool==False)
+        
+        remove_idx = lambda idxs_list, idx: idxs_list[idxs_list != idxs[idx]]
+        matches_idxs = [remove_idx(matches_cols[matches_rows==val],val) for val in range(len(idxs))]
+        non_matches_idxs = [remove_idx(non_matches_cols[non_matches_rows==val],val) for val in range(len(idxs))]
+        
+        return matches_idxs, non_matches_idxs
+
+    def calc_matches_bool(self, idx_i, idx_j):
+        assert len(idx_i) == len(idx_j), f"Lists length does not match: {len(idx_i)=}, {len(idx_j)=}"
+        gps_i = self.gps_lat_long_rad[idx_i, :]
+        gps_j = self.gps_lat_long_rad[idx_j, :]
+        return self._calc_matches_bool(gps_i, gps_j)
+
+    def _calc_matches_bool(self, lat_long_i, lat_long_j):
+        lat1, lon1 = lat_long_i[:, 0], lat_long_i[:, 1]
+        lat2, lon2 = lat_long_j[:, 0], lat_long_j[:, 1]
         dlon = lon2 - lon1
         dlat = lat2 - lat1
         
         distance_m = 6367 * 1e3 * 2 * np.arcsin(np.sqrt(np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2))
         
-        matches_bool = distance_m <= self.match_threshold
-        matches_idxs = np.where(matches_bool)[0]
-        non_matches_idxs = np.where(matches_bool==False)[0]
-        
-        remove_idx = lambda idxs: idxs[idxs != idx]
-        matches_idxs = remove_idx(matches_idxs)
-        non_matches_idxs = remove_idx(non_matches_idxs)
-        return matches_idxs, non_matches_idxs
+        matches_bool = (distance_m <= self.match_threshold)
+        return matches_bool
+
 
     def get_items(self):
         I, G = None, None
@@ -59,24 +70,6 @@ class RobotCarDataset(Dataset):
                 G = torch.cat((G, Gi), dim=0)
         return I, G
 
-    def get_item(self, idx_i):
-        Ii, Gi = self._load_sample(idx_i)
-        
-        match_idxs = self._calc_match_idxs(idx_i)
-        if len(match_idxs) == 0:
-            raise Exception("FML")
-        if random.random() > 0.5:
-            idx_j = self._get_match_idx(idx_i, match_idxs)
-            Ij, Gj = self._load_sample(idx_j)
-            Ij = Ij.expand(self.N, *Ij.shape)
-            Gj = Gj.expand(self.N, *Gj.shape)
-            y = torch.ones(self.N)
-        else:
-            idx_j = self._get_non_match_idx(idx_i, match_idxs)
-            Ij, Gj = self._load_multiple_samples(idx_j)
-            y = torch.ones(self.N) * -1
-
-        return {'Ii': Ii, 'Gi': Gi, 'Ij': Ij, 'Gj': Gj, 'is_match': y}
 
     def _load_sample(self, idx):
         curr_sample = self.samples_df.loc[idx]
@@ -90,32 +83,3 @@ class RobotCarDataset(Dataset):
         G = torch.from_numpy(utils.create_voxel_grid_from_point_cloud(pointcloud)).unsqueeze(0)
 
         return I, G
-    
-    def _load_multiple_samples(self, idxs):
-        I, G = None, None
-        for idx in idxs:
-            I_curr, G_curr = self._load_sample(idx)
-            I_curr, G_curr = I_curr.unsqueeze(0), G_curr.unsqueeze(0)
-            if I is None:
-                I, G = I_curr, G_curr
-            else:
-                I = torch.cat((I, I_curr), 0)
-                G = torch.cat((G, G_curr), 0)
-        
-        return I, G
-
-
-    
-    def _get_match_idx(self, idx_i, match_idxs):
-        while True:
-            idx_j = random.choice(match_idxs) # TODO: possible situaltion were match idxs is empty after few iterations
-            if self.samples_df.loc[idx_i]['date'] != self.samples_df.loc[idx_j]['date']:
-                break
-            match_idxs = np.delete(match_idxs, np.where(match_idxs == idx_j))
-        return idx_j
-    
-    def _get_non_match_idx(self, idx_i, match_idxs):
-        non_matches_idxs = np.arange(self.__len__())
-        non_matches_idxs = np.delete(non_matches_idxs, match_idxs)
-        super_batch = random.sample(list(non_matches_idxs), self.N)
-        return super_batch
