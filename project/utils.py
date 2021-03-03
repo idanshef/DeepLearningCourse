@@ -15,7 +15,7 @@ def create_dataset_df(data_dir, structure_time_span, dataset_csv):
             df.to_csv(dataset_csv, sep=',')
     
     # TODO: filter data
-    df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
+    # df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
     df = df[df['timestamps'].str.len()>1].reset_index()
     return df
 
@@ -91,7 +91,10 @@ def split_data_to_n_groups_size_k(dataset, n, k):
         matches_idxs, non_matches_idxs = dataset.calc_matches_idxs(group_idxs)
         is_match = [random.random() > 0.5 for val in range(int(k/2))]
         for j in range(int(k/2)):
-            group_idxs.append(random.choice(matches_idxs[j])) if is_match[j] else group_idxs.append(random.choice(non_matches_idxs[j]))
+            if len(matches_idxs) != 0 and is_match[j]:
+                group_idxs.append(random.choice(matches_idxs[j]))
+            else:
+                group_idxs.append(random.choice(non_matches_idxs[j]))
         
         if odd_even_idx >= 0:
             group_idxs.append(odd_even_idx)
