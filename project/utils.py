@@ -91,7 +91,7 @@ def split_data_to_n_groups_size_k(dataset, n, k):
         matches_idxs, non_matches_idxs = dataset.calc_matches_idxs(group_idxs)
         is_match = [random.random() > 0.5 for val in range(int(k/2))]
         for j in range(int(k/2)):
-            if len(matches_idxs) != 0 and is_match[j]:
+            if len(matches_idxs[j]) != 0 and is_match[j]:
                 group_idxs.append(random.choice(matches_idxs[j]))
             else:
                 group_idxs.append(random.choice(non_matches_idxs[j]))
