@@ -3,11 +3,13 @@ from datetime import datetime
 import torch
 import torch.nn as nn
 from torch import optim
+from torch.utils.tensorboard import SummaryWriter
 from dataset import RobotCarDataset
 from net_models import CompoundNet, MarginBasedLoss
 import utils
 import numpy as np
 import random
+import time
 
 
 def init_data(data_dir, dataset_csv, val_percent, structure_time_span, match_threshold):
@@ -99,10 +101,48 @@ def balance_batch(i_idxs, j_idxs, labels):
     return i_batch_idxs_list, j_batch_idxs_list, labels_batch_list
 
 
-def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k):
-    
+def evaluate(device, model, dataset_val, batch_size, n, k, threshold):
+    model.eval()
+    n_idxs_groups_size_k = utils.split_data_to_n_groups_size_k(dataset_val, n, k)
+    accuracy = 0
+    for group_idx, groups_idxs in enumerate(n_idxs_groups_size_k):
+        group_start = time.time()
+        print(f"\tEvaluation group: {group_idx+1}/{len(n_idxs_groups_size_k)}")
+        
+        dataset_k = RobotCarDataset.subset_of_dataset(dataset_val, groups_idxs)
+        i_idxs, j_idxs, labels = hard_mine(model, dataset_k, batch_size, k)
+        i_batch_idxs_list, j_batch_idxs_list, labels_batch_list = balance_batch(i_idxs, j_idxs, labels)
+        
+        for batch_idx, batch_tuple in enumerate(zip(i_batch_idxs_list, j_batch_idxs_list, labels_batch_list)):
+            i_batch_idxs, j_batch_idxs, labels_batch = batch_tuple
+            
+            dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, i_batch_idxs)
+            dataset_j = RobotCarDataset.subset_of_dataset(dataset_k, j_batch_idxs)
+            
+            Ii, Gi = dataset_i.get_items()
+            Ij, Gj = dataset_j.get_items()
+            
+            I = torch.cat((Ii, Ij), dim=0).to(device=device, dtype=torch.float32)
+            G = torch.cat((Gi, Gj), dim=0).to(device=device, dtype=torch.float32)
+            labels_batch = torch.Tensor(labels_batch).to(device=device, dtype=torch.float32)
+            
+            pred_descriptors = model(I, G)
+            del I, G
+            
+            pred_descriptors_i = pred_descriptors[:int(pred_descriptors.shape[0]/2)]
+            pred_descriptors_j = pred_descriptors[int(pred_descriptors.shape[0]/2):]
+            d_L1 = torch.sum(torch.abs(pred_descriptors_i - pred_descriptors_j), dim=1)
+            
+            pred_labels = torch.ones(d_L1.shape).to(device=device, dtype=torch.float32)
+            pred_labels[d_L1 > threshold] = -1
+            accuracy += len(torch.where(pred_labels==labels_batch)[0])/len(pred_labels)
+    return accuracy/(n*(2*k/batch_size))
+
+
+def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k, threshold):
+    writer = SummaryWriter()
     for epoch in range(epochs):
-        print(f"Epoch: {epoch}/{epochs}")
+        print(f"Epoch: {epoch+1}/{epochs}")
 
         model.train()
         epoch_loss = 0
@@ -110,7 +150,10 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
         n_idxs_groups_size_k = utils.split_data_to_n_groups_size_k(dataset_dict['train'], n, k)
         
         for group_idx, groups_idxs in enumerate(n_idxs_groups_size_k):
-            print(f"\tGroup: {group_idx}/{len(n_idxs_groups_size_k)}")
+            group_start = time.time()
+            group_loss = 0
+            
+            print(f"\tGroup: {group_idx+1}/{len(n_idxs_groups_size_k)}")
             optimizer.zero_grad()
             
             dataset_k = RobotCarDataset.subset_of_dataset(dataset_dict['train'], groups_idxs)
@@ -119,7 +162,6 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
             i_batch_idxs_list, j_batch_idxs_list, labels_batch_list = balance_batch(i_idxs, j_idxs, labels)
             
             for batch_idx, batch_tuple in enumerate(zip(i_batch_idxs_list, j_batch_idxs_list, labels_batch_list)):
-                print(f"\t\tBatch: {batch_idx}/{len(i_batch_idxs_list)}")
                 i_batch_idxs, j_batch_idxs, labels_batch = batch_tuple
                 
                 dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, i_batch_idxs)
@@ -139,35 +181,43 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
                 pred_descriptors_j = pred_descriptors[int(pred_descriptors.shape[0]/2):]
                 loss = loss_func(pred_descriptors_i, pred_descriptors_j, labels_batch)
                 epoch_loss += loss.item()
+                group_loss += loss.item()
             
+                print(f"\t\tBatch: {batch_idx+1}/{len(i_batch_idxs_list)}, loss: {loss.item()}")
+                
                 loss.backward()
                 optimizer.step()
+            
+            group_end = time.time()
+            print(f"\tGroup time: {group_end - group_start}, loss: {group_loss/(2*k/batch_size)}\n\n")
+        
+        with torch.no_grad():
+            val_accuracy = evaluate(device, model, dataset_dict['val'], batch_size, n, k, threshold)
+        
+        writer.add_scalar("Loss-train", epoch_loss / ((k/batch_size)*n), epoch)
+        writer.add_scalar("Evaluation", val_accuracy, epoch)
+        
+        print(f"Validate Accuracy: {val_accuracy}")
 
-        #     global_step += 1
-        #     print(f"Batch loading time: {end-start}")
-        #     print("Loss: {0}".format(loss.item()))
-        #     print('done batch {0}'.format(global_step))
-
-        # TODO: fix tensorboard
-        # writer.add_scalar("Loss-train", epoch_loss / len(data_loaded['train']), global_step)
-
-    # writer.close()
+    writer.close()
     return model
 
 
 if __name__ == "__main__":
     
     data_dir = r"/media/idansheffer/multi_view_hd/DeepLearning/data2"
+    weights_dir = r"/media/idansheffer/multi_view_hd/DeepLearning/weights"
     dataset_path = os.path.join(data_dir,'dataset_2_timestamps.csv')
     structure_time_span = 2
-    match_threshold = 5
+    match_threshold_m = 5
     val_percent = 10
     batch_size = 12
-    epochs = 20
+    epochs = 30
     n = 100
     k = 60
     alpha = 1e-3
     m = 0.5e-3
+    threshold = 0.5
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net_model = CompoundNet()
@@ -176,11 +226,11 @@ if __name__ == "__main__":
     nn.MarginRankingLoss
     optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
-    dataset_dict = init_data(data_dir, dataset_path, val_percent, structure_time_span, match_threshold)
-    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k)
+    dataset_dict = init_data(data_dir, dataset_path, val_percent, structure_time_span, match_threshold_m)
+    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k, threshold)
 
-    weights_path = f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt"
-    if not os.path.isdir(net_weights_dir):
-        os.makedirs(net_weights_dir)
+    weights_path = os.path.join(weights_dir, f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt")
+    if not os.path.isdir(weights_dir):
+        os.makedirs(weights_dir)
 
     torch.save(net_model.state_dict(), weights_path)
