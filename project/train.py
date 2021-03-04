@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 import torch
 import torch.nn as nn
+from itertools import zip_longest
 from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 from dataset import RobotCarDataset
@@ -12,189 +13,195 @@ import random
 import time
 
 
-def init_data(data_dir, dataset_csv, val_percent, structure_time_span, match_threshold):
+def init_data(data_dir, dataset_csv, structure_time_span, match_threshold, validate_lat_long, validate_radius_m):
     dataset_df = utils.create_dataset_df(data_dir, structure_time_span, dataset_csv)
     cameras = utils.load_cameras(data_dir)
     
-    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(dataset_df, val_percent/100)
+    full_dataset = RobotCarDataset(dataset_df, cameras, match_threshold)
+    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(full_dataset, validate_lat_long, validate_radius_m)
     select_subset_df = lambda set_idxs: dataset_df.iloc[set_idxs, :].reset_index()
     
     return {'val': RobotCarDataset(select_subset_df(val_idxs), cameras, match_threshold),
             'train': RobotCarDataset(select_subset_df(train_idxs), cameras, match_threshold)}
 
 
-def hard_mine(model, dataset_k, batch_size, k):
-    pred_descriptors_k = None
-    for i in range(int(k/batch_size)):
-        if i != int(k/batch_size)-1:
-            curr_samples = list(np.arange(i*batch_size, (i+1)*batch_size))
-        else:
-            curr_samples = list(np.arange(i*batch_size, k))
-            
-        dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, curr_samples)
-        I, G = dataset_i.get_items()
+def run_model(I, G, device, model):
+    I = I.to(device=device, dtype=torch.float32)
+    G = G.to(device=device, dtype=torch.float32)
         
-        I = I.to(device=device, dtype=torch.float32)
-        G = G.to(device=device, dtype=torch.float32)
-        
-        pred_descriptors_i = model(I, G)
-        pred_descriptors_i = pred_descriptors_i.to(device='cpu', dtype=torch.float32)
-        I = I.to(device='cpu', dtype=torch.float32)
-        G = G.to(device='cpu', dtype=torch.float32)
-        
-        if pred_descriptors_k is None:
-            pred_descriptors_k = pred_descriptors_i.clone()
-        else:
-            pred_descriptors_k = torch.cat((pred_descriptors_k, pred_descriptors_i), dim=0)
+    pred_descriptors = model(I, G).to(device='cpu', dtype=torch.float32)
+    del I, G
     
-    descriptor_size = pred_descriptors_k.shape[1]
-    repeat_pred = pred_descriptors_k.repeat(1,k).view(-1,descriptor_size)
-    d_L1 = torch.sum(torch.abs(repeat_pred - pred_descriptors_k.repeat(k,1)), dim=1).view(k,-1)
+    return pred_descriptors
+
+
+def hard_mine(model, device, I, G, batch_size, k):
+    pred_descriptors_group = None
+    
+    samples_group_list = list(map(np.array,zip_longest(*(iter(range(I.shape[0])),) * int(batch_size/2))))
+    for samples_group in samples_group_list:
+        pred_descriptors = run_model(I[samples_group], G[samples_group], device, model)
+        
+        if pred_descriptors_group is None:
+            pred_descriptors_group = pred_descriptors.clone()
+        else:
+            pred_descriptors_group = torch.cat((pred_descriptors_group, pred_descriptors), dim=0)
+    
+    descriptor_size = pred_descriptors_group.shape[1]
+    repeat_pred = pred_descriptors_group.repeat(1,k).view(-1,descriptor_size)
+    d_L1 = torch.sum(torch.abs(repeat_pred - pred_descriptors_group.repeat(k,1)), dim=1).view(k,-1)
     d_L1[torch.tril(torch.ones(d_L1.shape),diagonal=-1)==0] = torch.finfo(torch.float32).max
     
     min_d = torch.min(d_L1, dim=0)
-    top_k = torch.topk(-min_d.values, k)
+    top_half_k_matches = torch.topk(-min_d.values, int(k/2))
     
-    i_idxs = min_d.indices[top_k.indices]
-    j_idxs = top_k.indices
-    labels = dataset_k.calc_matches_bool(i_idxs, j_idxs)
+    i_idxs = min_d.indices[top_half_k_matches.indices]
+    j_idxs = top_half_k_matches.indices
 
-    return i_idxs, j_idxs, labels
-
-
-def balance_batch(i_idxs, j_idxs, labels):
-    pos_labels = np.where(labels == True)
-    neg_labels = np.where(labels == False)
-    pos_i_idx, neg_i_idx = i_idxs[pos_labels], i_idxs[neg_labels]
-    pos_j_idx, neg_j_idx = j_idxs[pos_labels], j_idxs[neg_labels]
-    
-    number_of_batches = int(2*k/batch_size) + (0 if k % batch_size == 0 else 1)
-    
-    i_batch_idxs_list = [[] for i in range(number_of_batches)]
-    j_batch_idxs_list = [[] for i in range(number_of_batches)]
-    labels_batch_list = [[] for i in range(number_of_batches)]
-    
-    list_idx, val_idx = 0, 0
-    while len(pos_i_idx) != val_idx:
-        i_batch_idxs_list[list_idx].append(pos_i_idx[val_idx])
-        j_batch_idxs_list[list_idx].append(pos_j_idx[val_idx])
-        labels_batch_list[list_idx].append(1)
-        list_idx = (list_idx+1) % number_of_batches
-        val_idx += 1
-    
-    list_idx, val_idx = 0, 0
-    while len(neg_i_idx) != val_idx:
-        reverse_list_idx = number_of_batches - 1 - list_idx
-        i_batch_idxs_list[reverse_list_idx].append(neg_i_idx[val_idx])
-        j_batch_idxs_list[reverse_list_idx].append(neg_j_idx[val_idx])
-        labels_batch_list[reverse_list_idx].append(-1)
-        list_idx = (list_idx+1) % number_of_batches
-        val_idx += 1
-    
-    for i in range(number_of_batches):
-        list_size = len(i_batch_idxs_list[i])
-        rand_order = random.sample(list(np.arange(list_size)), list_size)
-        i_batch_idxs_list[i] = [i_batch_idxs_list[i][val] for val in rand_order]
-        j_batch_idxs_list[i] = [j_batch_idxs_list[i][val] for val in rand_order]
-        labels_batch_list[i] = [labels_batch_list[i][val] for val in rand_order]
-    
-    return i_batch_idxs_list, j_batch_idxs_list, labels_batch_list
+    return i_idxs, j_idxs
 
 
-def evaluate(device, model, dataset_val, batch_size, n, k, threshold):
-    model.eval()
-    n_idxs_groups_size_k = utils.split_data_to_n_groups_size_k(dataset_val, n, k)
-    accuracy = 0
-    for group_idx, groups_idxs in enumerate(n_idxs_groups_size_k):
+def balance_batch(I_k, G_k, dataset_orig, i_j_labels_hard_k, j_idxs_match_orig_list):
+    i_idxs_hard_k, j_idxs_hard_k, labels_hard = i_j_labels_hard_k
+    
+    random_order_hard = np.arange(len(i_idxs_hard_k))
+    random.shuffle(random_order_hard)
+    i_idxs_hard_k = i_idxs_hard_k[random_order_hard]
+    j_idxs_hard_k = j_idxs_hard_k[random_order_hard]
+    labels_hard = torch.tensor(labels_hard[random_order_hard])
+    
+    i_idxs_match_k = np.arange(len(j_idxs_match_orig_list))
+    num_of_matches = int(len(i_idxs_match_k)/2)
+    random_order_match = [i for i,x in enumerate(j_idxs_match_orig_list) if len(x)!=0]
+    random.shuffle(random_order_match)
+    i_idxs_match_k = np.array(i_idxs_match_k)[random_order_match]
+    i_idxs_match_k = i_idxs_match_k[:num_of_matches]
+    
+    j_idxs_match_orig_list = list(np.array(j_idxs_match_orig_list)[random_order_match])
+    j_idxs_match_orig = np.array([random.choice(j_idxs_match_orig_list[i]) for i in range(num_of_matches)])
+    I_j_match, G_j_match = dataset_orig.get_items_at(j_idxs_match_orig)
+    
+    Ii = torch.cat((I_k[i_idxs_hard_k], I_k[i_idxs_match_k]), dim=0)
+    Gi = torch.cat((G_k[i_idxs_hard_k], G_k[i_idxs_match_k]), dim=0)
+    
+    Ij = torch.cat((I_k[j_idxs_hard_k], I_j_match), dim=0)
+    Gj = torch.cat((G_k[j_idxs_hard_k], G_j_match), dim=0)
+    
+    labels_match = torch.tensor([True] * num_of_matches)
+    labels_super_batch = torch.stack((labels_hard, labels_match)).transpose(0, 1).reshape(1,-1)[0]
+    
+    half_batch_size = int(batch_size/2)
+    reorder_super_batch = torch.arange(Ii.shape[0]).view(2,-1).transpose(0,1).reshape(1,-1)[0]
+    reorder_super_batch = list(map(list,zip_longest(*(iter(reorder_super_batch),) * half_batch_size)))
+    
+    num_of_none_values = (half_batch_size - (Ii.shape[0] % half_batch_size)) % half_batch_size
+    if num_of_none_values != 0:
+        reorder_super_batch[-1] = reorder_super_batch[-1][:-num_of_none_values]
+    
+    Ii_batch_list, Ij_batch_list = [], []
+    Gi_batch_list, Gj_batch_list = [], []
+    labels_batch_list = []
+    for i in range(len(reorder_super_batch)):
+        random_order = np.arange(len(reorder_super_batch[i]))
+        random.shuffle(random_order)
+        
+        new_order = torch.tensor(reorder_super_batch[i])[random_order]
+        Ii_batch_list.append(Ii[new_order])
+        Ij_batch_list.append(Ij[new_order])
+        Gi_batch_list.append(Gi[new_order])
+        Gj_batch_list.append(Gj[new_order])
+        labels_batch_list.append(labels_super_batch[new_order])
+        
+    return Ii_batch_list, Ij_batch_list, Gi_batch_list, Gj_batch_list, labels_batch_list
+
+
+def run_groups_through_model(model, device, is_train, dataset, k, batch_size, threshold=None):
+    if not is_train:
+        assert threshold is not None, "threshold must have value on evalutaion"
+    
+    groups_size_k_list = utils.split_data_to_groups_size_k(dataset, k)
+    for group_idx, i_idxs_match_orig in enumerate(groups_size_k_list):
+        print(f"\tGroup: {group_idx+1}/{len(groups_size_k_list)}")
         group_start = time.time()
-        print(f"\tEvaluation group: {group_idx+1}/{len(n_idxs_groups_size_k)}")
+        global_steps = 0
         
-        dataset_k = RobotCarDataset.subset_of_dataset(dataset_val, groups_idxs)
-        i_idxs, j_idxs, labels = hard_mine(model, dataset_k, batch_size, k)
-        i_batch_idxs_list, j_batch_idxs_list, labels_batch_list = balance_batch(i_idxs, j_idxs, labels)
-        
-        for batch_idx, batch_tuple in enumerate(zip(i_batch_idxs_list, j_batch_idxs_list, labels_batch_list)):
-            i_batch_idxs, j_batch_idxs, labels_batch = batch_tuple
-            
-            dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, i_batch_idxs)
-            dataset_j = RobotCarDataset.subset_of_dataset(dataset_k, j_batch_idxs)
-            
-            Ii, Gi = dataset_i.get_items()
-            Ij, Gj = dataset_j.get_items()
-            
-            I = torch.cat((Ii, Ij), dim=0).to(device=device, dtype=torch.float32)
-            G = torch.cat((Gi, Gj), dim=0).to(device=device, dtype=torch.float32)
-            labels_batch = torch.Tensor(labels_batch).to(device=device, dtype=torch.float32)
-            
-            pred_descriptors = model(I, G)
-            del I, G
-            
-            pred_descriptors_i = pred_descriptors[:int(pred_descriptors.shape[0]/2)]
-            pred_descriptors_j = pred_descriptors[int(pred_descriptors.shape[0]/2):]
-            d_L1 = torch.sum(torch.abs(pred_descriptors_i - pred_descriptors_j), dim=1)
-            
-            pred_labels = torch.ones(d_L1.shape).to(device=device, dtype=torch.float32)
-            pred_labels[d_L1 > threshold] = -1
-            accuracy += len(torch.where(pred_labels==labels_batch)[0])/len(pred_labels)
-    return accuracy/(n*(2*k/batch_size))
-
-
-def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k, threshold):
-    writer = SummaryWriter()
-    for epoch in range(epochs):
-        print(f"Epoch: {epoch+1}/{epochs}")
-
-        model.train()
-        epoch_loss = 0
-        
-        n_idxs_groups_size_k = utils.split_data_to_n_groups_size_k(dataset_dict['train'], n, k)
-        
-        for group_idx, groups_idxs in enumerate(n_idxs_groups_size_k):
-            group_start = time.time()
+        if is_train:
             group_loss = 0
-            
-            print(f"\tGroup: {group_idx+1}/{len(n_idxs_groups_size_k)}")
+            epoch_loss = 0
             optimizer.zero_grad()
+        else:
+            accuracy = 0
+        
+        get_idxs_in_original_set = lambda idxs: np.array(i_idxs_match_orig)[idxs]
+        j_idxs_match_orig_list = dataset.calc_matches_idxs(i_idxs_match_orig)
+        
+        I_k, G_k = dataset.get_items_at(i_idxs_match_orig)
+        
+        with torch.no_grad():
+            i_idxs_hard_k, j_idxs_hard_k = hard_mine(model, device, I_k, G_k, batch_size, k)
+        
+        labels_hard = dataset.calc_matches_bool(get_idxs_in_original_set(i_idxs_hard_k), 
+                                                get_idxs_in_original_set(j_idxs_hard_k))
+        i_j_labels_hard_k = (i_idxs_hard_k, j_idxs_hard_k, labels_hard)
+        
+        Ii_batch_list, Ij_batch_list, Gi_batch_list, Gj_batch_list, labels_batch_list = balance_batch(
+            I_k, G_k, dataset, i_j_labels_hard_k, j_idxs_match_orig_list)
+        
+                
+        for batch_idx in range(len(labels_batch_list)):
+            Ii_batch, Ij_batch = Ii_batch_list[batch_idx], Ij_batch_list[batch_idx]
+            Gi_batch, Gj_batch = Gi_batch_list[batch_idx], Gj_batch_list[batch_idx]
+            labels_batch = labels_batch_list[batch_idx]
             
-            dataset_k = RobotCarDataset.subset_of_dataset(dataset_dict['train'], groups_idxs)
-            with torch.no_grad():
-                i_idxs, j_idxs, labels = hard_mine(model, dataset_k, batch_size, k)
-            i_batch_idxs_list, j_batch_idxs_list, labels_batch_list = balance_batch(i_idxs, j_idxs, labels)
+
+            I_batch = torch.cat((Ii_batch, Ij_batch), dim=0)
+            G_batch = torch.cat((Gi_batch, Gj_batch), dim=0)
+            pred_descriptors = run_model(I_batch, G_batch, device, model)
             
-            for batch_idx, batch_tuple in enumerate(zip(i_batch_idxs_list, j_batch_idxs_list, labels_batch_list)):
-                i_batch_idxs, j_batch_idxs, labels_batch = batch_tuple
-                
-                dataset_i = RobotCarDataset.subset_of_dataset(dataset_k, i_batch_idxs)
-                dataset_j = RobotCarDataset.subset_of_dataset(dataset_k, j_batch_idxs)
-                
-                Ii, Gi = dataset_i.get_items()
-                Ij, Gj = dataset_j.get_items()
-                
-                I = torch.cat((Ii, Ij), dim=0).to(device=device, dtype=torch.float32)
-                G = torch.cat((Gi, Gj), dim=0).to(device=device, dtype=torch.float32)
-                labels_batch = torch.Tensor(labels_batch).to(device=device, dtype=torch.float32)
-                
-                pred_descriptors = model(I, G)
-                del I, G
-                
-                pred_descriptors_i = pred_descriptors[:int(pred_descriptors.shape[0]/2)]
-                pred_descriptors_j = pred_descriptors[int(pred_descriptors.shape[0]/2):]
+            half_descriptors_size = int(pred_descriptors.shape[0]/2)
+            pred_descriptors_i = pred_descriptors[:half_descriptors_size]
+            pred_descriptors_j = pred_descriptors[half_descriptors_size:]
+            
+            if is_train:
                 loss = loss_func(pred_descriptors_i, pred_descriptors_j, labels_batch)
                 epoch_loss += loss.item()
                 group_loss += loss.item()
-            
-                print(f"\t\tBatch: {batch_idx+1}/{len(i_batch_idxs_list)}, loss: {loss.item()}")
-                
+            else:
+                d_L1 = torch.sum(torch.abs(pred_descriptors_i - pred_descriptors_j), dim=1)
+                pred_labels = torch.ones(d_L1.shape).to(device=device, dtype=torch.float32)
+                pred_labels[d_L1 > threshold] = -1
+                accuracy += len(torch.where(pred_labels==labels_batch)[0])/len(pred_labels)
+            global_steps += 1
+
+            if is_train:
+                print(f"\t\tBatch: {batch_idx+1}/{len(labels_batch_list)}, loss: {loss.item()}")
                 loss.backward()
                 optimizer.step()
+            else:
+                print(f"\t\tBatch: {batch_idx+1}/{len(labels_batch_list)}")
             
-            group_end = time.time()
-            print(f"\tGroup time: {group_end - group_start}, loss: {group_loss/(2*k/batch_size)}\n\n")
-        
+        group_end = time.time()
+        if is_train:
+            print(f"\tGroup time: {group_end - group_start}, loss: {group_loss/global_steps}")
+        else:
+            print(f"\tGroup time: {group_end - group_start}, accuracy: {accuracy/global_steps}")
+    
+    if is_train:
+        return epoch_loss/global_steps
+    return accuracy/global_steps
+
+
+def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, k, threshold):
+    writer = SummaryWriter()
+    for epoch in range(epochs):
+        print(f"Epoch: {epoch+1}/{epochs}")
+        model.train()
+        mean_loss = run_groups_through_model(model, device, True, dataset_dict['train'], k, batch_size)
         with torch.no_grad():
-            val_accuracy = evaluate(device, model, dataset_dict['val'], batch_size, n, k, threshold)
+            model.eval()
+            val_accuracy = run_groups_through_model(model, device, False, dataset_dict['val'], k, batch_size, threshold)
         
-        writer.add_scalar("Loss-train", epoch_loss / ((k/batch_size)*n), epoch)
+        writer.add_scalar("Loss-train", mean_loss, epoch)
         writer.add_scalar("Evaluation", val_accuracy, epoch)
         
         print(f"Validate Accuracy: {val_accuracy}")
@@ -210,24 +217,24 @@ if __name__ == "__main__":
     dataset_path = os.path.join(data_dir,'dataset_2_timestamps.csv')
     structure_time_span = 2
     match_threshold_m = 5
-    val_percent = 10
     batch_size = 12
-    epochs = 30
-    n = 100
+    epochs = 10
     k = 60
     alpha = 1e-3
     m = 0.5e-3
     threshold = 0.5
     
+    validate_lat_long, validate_radius_m = (51.76065874460691, -1.2674376580131264), 450
+    # validate_lat_long, validate_radius_m = (51.765443, -1.258657), 500
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net_model = CompoundNet()
     net_model = net_model.to(device=device)
     loss_func = MarginBasedLoss(alpha=alpha, m=m)
-    nn.MarginRankingLoss
     optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
-    dataset_dict = init_data(data_dir, dataset_path, val_percent, structure_time_span, match_threshold_m)
-    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, n, k, threshold)
+    dataset_dict = init_data(data_dir, dataset_path, structure_time_span, match_threshold_m, validate_lat_long, validate_radius_m)
+    net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, k, threshold)
 
     weights_path = os.path.join(weights_dir, f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt")
     if not os.path.isdir(weights_dir):

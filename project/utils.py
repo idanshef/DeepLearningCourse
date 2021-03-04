@@ -2,6 +2,7 @@ import os
 import random
 import numpy as np
 import pandas as pd
+from itertools import zip_longest
 from robotcar_dataset_sdk.camera_model import CameraModel
 
 
@@ -15,7 +16,7 @@ def create_dataset_df(data_dir, structure_time_span, dataset_csv):
             df.to_csv(dataset_csv, sep=',')
     
     # TODO: filter data
-    # df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
+    df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
     df = df[df['timestamps'].str.len()>1].reset_index()
     return df
 
@@ -66,41 +67,21 @@ def load_cameras(data_dir):
     return camera_model_dict
 
 
-def split_idxs_to_train_val_idxs(dataset, val_percent):
-    assert 0. <= val_percent <= 1., f"Validation percent must be between [0,1]. Got {val_percent}"
-    
-    num_val = int(len(dataset) * val_percent)
-    idxs_list = dataset.index.values
-    val_set_idxs = random.sample(list(dataset.index.values), num_val)
-    train_set_idxs = np.delete(idxs_list, val_set_idxs)
+def split_idxs_to_train_val_idxs(dataset, validate_lat_long, validate_radius_m):
+    is_match = dataset.calc_matches_to_point(np.radians(validate_lat_long[0]), np.radians(validate_lat_long[1]), validate_radius_m)
+    val_set_idxs = np.where(is_match)[0]
+    train_set_idxs = np.where(is_match==False)[0]
     return train_set_idxs, val_set_idxs
 
-
-def split_data_to_n_groups_size_k(dataset, n, k):
-    dataset_idxs = list(dataset.samples_df.index.values)
-    samples_groups = []
-    for i in range(n):
-        if k % 2 == 0:
-            group_idxs = random.sample(dataset_idxs, int(k/2))
-            odd_even_idx = -1
-        else:
-            group_idxs = random.sample(dataset_idxs, int(k/2) + 1)
-            odd_even_idx = group_idxs[-1]
-            group_idxs = group_idxs[:-1]
-        
-        matches_idxs, non_matches_idxs = dataset.calc_matches_idxs(group_idxs)
-        is_match = [random.random() > 0.5 for val in range(int(k/2))]
-        for j in range(int(k/2)):
-            if len(matches_idxs[j]) != 0 and is_match[j]:
-                group_idxs.append(random.choice(matches_idxs[j]))
-            else:
-                group_idxs.append(random.choice(non_matches_idxs[j]))
-        
-        if odd_even_idx >= 0:
-            group_idxs.append(odd_even_idx)
-        samples_groups.append(group_idxs)
-    
-    return samples_groups
+def split_data_to_groups_size_k(dataset, k):
+    df_idxs_values = []
+    df_idxs_values[:] = dataset.samples_df.index.values
+    random.shuffle(df_idxs_values)
+    group_size_k_list = list(map(list,zip_longest(*(iter(df_idxs_values),) * k)))
+    num_of_none_values = (k - (len(df_idxs_values) % k))
+    if num_of_none_values != 0:
+        group_size_k_list[-1] = group_size_k_list[-1][:-num_of_none_values]
+    return group_size_k_list
 
 
 def create_voxel_grid_from_point_cloud(point_cloud, grid_resolution = (96, 96, 48), volume_size = (40, 40, 20)):

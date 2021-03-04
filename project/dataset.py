@@ -24,28 +24,37 @@ class RobotCarDataset(Dataset):
         return cls(dataset.samples_df.iloc[idxs, :].reset_index(drop=True), 
                    dataset.camera_model_dict, dataset.match_threshold)
 
-    def calc_matches_idxs(self, idxs):
+    def calc_matches_idxs(self, idxs, include_same_day=False):
         subset_gps_mat = self.gps_lat_long_rad[idxs, :]
         subset_repeat = subset_gps_mat.repeat(self.gps_lat_long_rad.shape[0], axis=0)
         tile_gps_mat = np.tile(self.gps_lat_long_rad, (len(idxs),1))
         
-        matches_bool = self._calc_matches_bool(subset_repeat, tile_gps_mat).reshape(len(idxs), -1)
+        matches_bool = self._calc_matches_bool(subset_repeat, tile_gps_mat, self.match_threshold).reshape(len(idxs), -1)
         matches_rows, matches_cols = np.where(matches_bool)
-        non_matches_rows, non_matches_cols = np.where(matches_bool==False)
         
         remove_idx = lambda idxs_list, idx: idxs_list[idxs_list != idxs[idx]]
         matches_idxs = [remove_idx(matches_cols[matches_rows==val],val) for val in range(len(idxs))]
-        non_matches_idxs = [remove_idx(non_matches_cols[non_matches_rows==val],val) for val in range(len(idxs))]
         
-        return matches_idxs, non_matches_idxs
+        if include_same_day==False:
+            exclude_same_day = lambda matches_df, idx: list(matches_df.loc[
+                matches_df['date'] != self.samples_df.iloc[idx]['date']].index.values)
+            matches_idxs = [exclude_same_day(self.samples_df.iloc[matches_list], idx_matches) 
+                            for matches_list, idx_matches in zip(matches_idxs, idxs)]
+        
+        return matches_idxs
 
     def calc_matches_bool(self, idx_i, idx_j):
         assert len(idx_i) == len(idx_j), f"Lists length does not match: {len(idx_i)=}, {len(idx_j)=}"
         gps_i = self.gps_lat_long_rad[idx_i, :]
         gps_j = self.gps_lat_long_rad[idx_j, :]
-        return self._calc_matches_bool(gps_i, gps_j)
+        return self._calc_matches_bool(gps_i, gps_j, self.match_threshold)
 
-    def _calc_matches_bool(self, lat_long_i, lat_long_j):
+    def calc_matches_to_point(self, lat, long, radius):
+        lat_long = np.array([[lat, long]])
+        repeat_lat_long = lat_long.repeat(self.gps_lat_long_rad.shape[0], axis=0)
+        return self._calc_matches_bool(repeat_lat_long, self.gps_lat_long_rad, radius)
+
+    def _calc_matches_bool(self, lat_long_i, lat_long_j, match_threshold_m):
         lat1, lon1 = lat_long_i[:, 0], lat_long_i[:, 1]
         lat2, lon2 = lat_long_j[:, 0], lat_long_j[:, 1]
         dlon = lon2 - lon1
@@ -53,13 +62,12 @@ class RobotCarDataset(Dataset):
         
         distance_m = 6367 * 1e3 * 2 * np.arcsin(np.sqrt(np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2))
         
-        matches_bool = (distance_m <= self.match_threshold)
+        matches_bool = (distance_m <= match_threshold_m)
         return matches_bool
-
-
-    def get_items(self):
+    
+    def get_items_at(self, idxs):
         I, G = None, None
-        for i in range(len(self.samples_df.index)):
+        for i in idxs:
             Ii, Gi = self._load_sample(i)
             Ii, Gi = Ii.unsqueeze(0), Gi.unsqueeze(0)
             
