@@ -122,22 +122,27 @@ def balance_batch(I_k, G_k, dataset_orig, i_j_labels_hard_k, j_idxs_match_orig_l
     return Ii_batch_list, Ij_batch_list, Gi_batch_list, Gj_batch_list, labels_batch_list
 
 
-def run_groups_through_model(model, device, is_train, dataset, k, batch_size, threshold=None):
+def run_groups_through_model(model, device, writer, is_train, dataset, k, batch_size, threshold=None):
     if not is_train:
         assert threshold is not None, "threshold must have value on evalutaion"
     
     groups_size_k_list = utils.split_data_to_groups_size_k(dataset, k)
+    global_steps = 0
+    if is_train:
+        epoch_loss = 0
+    else:
+        epoch_accuracy = 0
+        
     for group_idx, i_idxs_match_orig in enumerate(groups_size_k_list):
         print(f"\tGroup: {group_idx+1}/{len(groups_size_k_list)}")
         group_start = time.time()
-        global_steps = 0
+        group_steps = 0
         
         if is_train:
             group_loss = 0
-            epoch_loss = 0
             optimizer.zero_grad()
         else:
-            accuracy = 0
+            group_accuracy = 0
         
         get_idxs_in_original_set = lambda idxs: np.array(i_idxs_match_orig)[idxs]
         j_idxs_match_orig_list = dataset.calc_matches_idxs(i_idxs_match_orig)
@@ -159,8 +164,8 @@ def run_groups_through_model(model, device, is_train, dataset, k, batch_size, th
         for batch_idx in range(len(labels_batch_list)):
             Ii_batch, Ij_batch = Ii_batch_list[batch_idx], Ij_batch_list[batch_idx]
             Gi_batch, Gj_batch = Gi_batch_list[batch_idx], Gj_batch_list[batch_idx]
-            labels_batch = labels_batch_list[batch_idx]
-            
+            labels_batch = torch.ones(Ii_batch.shape[0])
+            labels_batch[labels_batch_list[batch_idx]==False] = -1
 
             I_batch = torch.cat((Ii_batch, Ij_batch), dim=0)
             G_batch = torch.cat((Gi_batch, Gj_batch), dim=0)
@@ -176,10 +181,14 @@ def run_groups_through_model(model, device, is_train, dataset, k, batch_size, th
                 group_loss += loss.item()
             else:
                 d_L1 = torch.sum(torch.abs(pred_descriptors_i - pred_descriptors_j), dim=1)
-                pred_labels = torch.ones(d_L1.shape).to(device=device, dtype=torch.float32)
+                pred_labels = torch.ones(d_L1.shape).to(device='cpu', dtype=torch.float32)
                 pred_labels[d_L1 > threshold] = -1
-                accuracy += len(torch.where(pred_labels==labels_batch)[0])/len(pred_labels)
+                accuracy = len(torch.where(pred_labels==labels_batch)[0])/len(pred_labels)
+                epoch_accuracy += accuracy
+                group_accuracy += accuracy
+            
             global_steps += 1
+            group_steps += 1
 
             if is_train:
                 print(f"\t\tBatch: {batch_idx+1}/{len(labels_batch_list)}, loss: {loss.item()}")
@@ -190,13 +199,17 @@ def run_groups_through_model(model, device, is_train, dataset, k, batch_size, th
             
         group_end = time.time()
         if is_train:
-            print(f"\tGroup time: {group_end - group_start}, loss: {group_loss/global_steps}")
+            mean_group_loss = group_loss/group_steps
+            print(f"\tGroup time: {group_end - group_start}, loss: {mean_group_loss}")
+            writer.add_scalar("Group loss-train", mean_group_loss, group_idx)
         else:
-            print(f"\tGroup time: {group_end - group_start}, accuracy: {accuracy/global_steps}")
+            mean_group_accuracy = group_accuracy/group_steps
+            print(f"\tGroup time: {group_end - group_start}, accuracy: {mean_group_accuracy}")
+            writer.add_scalar("Group Evaluation", mean_group_accuracy, group_idx)
     
     if is_train:
         return epoch_loss/global_steps
-    return accuracy/global_steps
+    return epoch_accuracy/global_steps
 
 
 def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, k, threshold):
@@ -204,10 +217,10 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
     for epoch in range(epochs):
         print(f"Epoch: {epoch+1}/{epochs}")
         model.train()
-        mean_loss = run_groups_through_model(model, device, True, dataset_dict['train'], k, batch_size)
+        mean_loss = run_groups_through_model(model, device, writer, True, dataset_dict['train'], k, batch_size)
         with torch.no_grad():
             model.eval()
-            val_accuracy = run_groups_through_model(model, device, False, dataset_dict['val'], k, batch_size, threshold)
+            val_accuracy = run_groups_through_model(model, device, writer, False, dataset_dict['val'], k, batch_size, threshold)
         
         writer.add_scalar("Loss-train", mean_loss, epoch)
         writer.add_scalar("Evaluation", val_accuracy, epoch)
@@ -227,10 +240,10 @@ if __name__ == "__main__":
     match_threshold_m = 5
     batch_size = 12
     epochs = 10
-    k = 300
-    alpha = 1e-3
-    m = 0.5e-3
-    threshold = 0.5
+    k = 600
+    alpha = 1
+    m = 0.5
+    threshold = 1
     
     # validate_lat_long_radius_m = (51.76065874460691, -1.2674376580131264, 70)
     validate_lat_long_radius_m = (51.76065874460691, -1.2674376580131264, 65)
@@ -244,6 +257,8 @@ if __name__ == "__main__":
     optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
     dataset_dict = init_data(data_dir, dataset_path, structure_time_span, match_threshold_m, validate_lat_long_radius_m, train_lat_long_radius_m)
+    # matches_list = dataset_dict['train'].calc_matches_idxs([100])
+    # dataset_dict['train'].get_items_at([100,1325,2180,3560,10000])
     net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, k, threshold)
 
     weights_path = os.path.join(weights_dir, f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt")
