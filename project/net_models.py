@@ -125,9 +125,17 @@ class ConvBlock3D(nn.Module):
 class FusionNet(nn.Module):
     def __init__(self):
         super(FusionNet, self).__init__()
+        self.fc1 = nn.Linear(in_features=128, out_features=128)
+        self.fc2 = nn.Linear(in_features=128, out_features=128)
+        self.fc3 = nn.Linear(in_features=128, out_features=128)
+        self.fc4 = nn.Linear(in_features=128, out_features=128)
     
     def forward(self, I, G):
-        return torch.cat((I, G), 1)
+        I, G = self.fc1(I), self.fc1(I)
+        I, G = self.fc2(I), self.fc2(I)
+        I_G = self.fc3(I + G)
+        return self.fc4(I_G)
+        # return torch.cat((I, G), 1)
 
 class MarginBasedLoss(nn.Module):
     def __init__(self, alpha, m, norm_type=1, reduction='mean'):
