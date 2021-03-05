@@ -131,9 +131,9 @@ class FusionNet(nn.Module):
         self.fc4 = nn.Linear(in_features=128, out_features=128)
     
     def forward(self, I, G):
-        I, G = self.fc1(I), self.fc1(I)
-        I, G = self.fc2(I), self.fc2(I)
-        I_G = self.fc3(I + G)
+        I, G = self.fc1(I), self.fc1(G)
+        I_G = self.fc2(I + G)
+        I_G = self.fc3(I_G)
         return self.fc4(I_G)
         # return torch.cat((I, G), 1)
 
