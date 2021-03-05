@@ -48,6 +48,13 @@ class RobotCarDataset(Dataset):
         gps_i = self.gps_lat_long_rad[idx_i, :]
         gps_j = self.gps_lat_long_rad[idx_j, :]
         return self._calc_matches_bool(gps_i, gps_j, self.match_threshold)
+    
+    def calc_matches_mat(self, idxs):
+        subset_gps_mat = self.gps_lat_long_rad[idxs, :]
+        subset_repeat = subset_gps_mat.repeat(len(idxs), axis=0)
+        tile_gps_mat = np.tile(subset_gps_mat, (len(idxs),1))
+        matches_vec = self._calc_matches_bool(tile_gps_mat, subset_repeat, self.match_threshold)
+        return matches_vec.reshape((len(idxs),-1))
 
     def calc_matches_to_point(self, lat, long, radius):
         lat_long = np.array([[lat, long]])

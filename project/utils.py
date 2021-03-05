@@ -16,7 +16,7 @@ def create_dataset_df(data_dir, structure_time_span, dataset_csv):
             df.to_csv(dataset_csv, sep=',')
     
     # TODO: filter data
-    df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
+    # df = df[df['date'].isin(['2015-03-10-14-18-10', '2014-07-14-14-49-50', '2014-11-18-13-20-12', '2014-12-09-13-21-02'])]
     df = df[df['timestamps'].str.len()>1].reset_index()
     return df
 
@@ -67,10 +67,14 @@ def load_cameras(data_dir):
     return camera_model_dict
 
 
-def split_idxs_to_train_val_idxs(dataset, validate_lat_long, validate_radius_m):
-    is_match = dataset.calc_matches_to_point(np.radians(validate_lat_long[0]), np.radians(validate_lat_long[1]), validate_radius_m)
-    val_set_idxs = np.where(is_match)[0]
-    train_set_idxs = np.where(is_match==False)[0]
+def split_idxs_to_train_val_idxs(dataset, validate_lat_long_radius_m, train_lat_long_radius_m):
+    validate_lat, validate_long, validate_radius_m = validate_lat_long_radius_m
+    train_lat, train_long, train_radius_m = train_lat_long_radius_m
+    
+    is_match_val = dataset.calc_matches_to_point(np.radians(validate_lat), np.radians(validate_long), validate_radius_m)
+    is_match_train = dataset.calc_matches_to_point(np.radians(train_lat), np.radians(train_long), train_radius_m)
+    val_set_idxs = np.where(is_match_val)[0]
+    train_set_idxs = np.where(is_match_train)[0]
     return train_set_idxs, val_set_idxs
 
 def split_data_to_groups_size_k(dataset, k):

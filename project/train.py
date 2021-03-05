@@ -13,12 +13,12 @@ import random
 import time
 
 
-def init_data(data_dir, dataset_csv, structure_time_span, match_threshold, validate_lat_long, validate_radius_m):
+def init_data(data_dir, dataset_csv, structure_time_span, match_threshold, validate_lat_long_radius_m, train_lat_long_radius_m):    
     dataset_df = utils.create_dataset_df(data_dir, structure_time_span, dataset_csv)
     cameras = utils.load_cameras(data_dir)
     
     full_dataset = RobotCarDataset(dataset_df, cameras, match_threshold)
-    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(full_dataset, validate_lat_long, validate_radius_m)
+    train_idxs, val_idxs = utils.split_idxs_to_train_val_idxs(full_dataset, validate_lat_long_radius_m, train_lat_long_radius_m)
     select_subset_df = lambda set_idxs: dataset_df.iloc[set_idxs, :].reset_index()
     
     return {'val': RobotCarDataset(select_subset_df(val_idxs), cameras, match_threshold),
@@ -35,10 +35,15 @@ def run_model(I, G, device, model):
     return pred_descriptors
 
 
-def hard_mine(model, device, I, G, batch_size, k):
+def hard_mine(model, device, I, G, batch_size, k, matches_mat):
     pred_descriptors_group = None
     
-    samples_group_list = list(map(np.array,zip_longest(*(iter(range(I.shape[0])),) * int(batch_size/2))))
+    half_batch_size = int(batch_size/2)
+    samples_group_list = list(map(np.array,zip_longest(*(iter(range(I.shape[0])),) * half_batch_size)))
+    num_of_none_values = (half_batch_size - (I.shape[0] % half_batch_size)) % half_batch_size
+    if num_of_none_values != 0:
+        samples_group_list[-1] = samples_group_list[-1][:-num_of_none_values].astype(int)
+        
     for samples_group in samples_group_list:
         pred_descriptors = run_model(I[samples_group], G[samples_group], device, model)
         
@@ -48,12 +53,14 @@ def hard_mine(model, device, I, G, batch_size, k):
             pred_descriptors_group = torch.cat((pred_descriptors_group, pred_descriptors), dim=0)
     
     descriptor_size = pred_descriptors_group.shape[1]
-    repeat_pred = pred_descriptors_group.repeat(1,k).view(-1,descriptor_size)
-    d_L1 = torch.sum(torch.abs(repeat_pred - pred_descriptors_group.repeat(k,1)), dim=1).view(k,-1)
+    super_batch_size = I.shape[0]
+    repeat_pred = pred_descriptors_group.repeat(1,super_batch_size).view(-1,descriptor_size)
+    d_L1 = torch.sum(torch.abs(repeat_pred - pred_descriptors_group.repeat(super_batch_size,1)), dim=1).view(super_batch_size,-1)
+    d_L1[matches_mat==True] = torch.finfo(torch.float32).max
     d_L1[torch.tril(torch.ones(d_L1.shape),diagonal=-1)==0] = torch.finfo(torch.float32).max
     
     min_d = torch.min(d_L1, dim=0)
-    top_half_k_matches = torch.topk(-min_d.values, int(k/2))
+    top_half_k_matches = torch.topk(-min_d.values, int(super_batch_size/2))
     
     i_idxs = min_d.indices[top_half_k_matches.indices]
     j_idxs = top_half_k_matches.indices
@@ -77,7 +84,7 @@ def balance_batch(I_k, G_k, dataset_orig, i_j_labels_hard_k, j_idxs_match_orig_l
     i_idxs_match_k = np.array(i_idxs_match_k)[random_order_match]
     i_idxs_match_k = i_idxs_match_k[:num_of_matches]
     
-    j_idxs_match_orig_list = list(np.array(j_idxs_match_orig_list)[random_order_match])
+    j_idxs_match_orig_list = list(np.array(j_idxs_match_orig_list, dtype=object)[random_order_match])
     j_idxs_match_orig = np.array([random.choice(j_idxs_match_orig_list[i]) for i in range(num_of_matches)])
     I_j_match, G_j_match = dataset_orig.get_items_at(j_idxs_match_orig)
     
@@ -136,9 +143,10 @@ def run_groups_through_model(model, device, is_train, dataset, k, batch_size, th
         j_idxs_match_orig_list = dataset.calc_matches_idxs(i_idxs_match_orig)
         
         I_k, G_k = dataset.get_items_at(i_idxs_match_orig)
+        matches_mat = dataset.calc_matches_mat(i_idxs_match_orig)
         
         with torch.no_grad():
-            i_idxs_hard_k, j_idxs_hard_k = hard_mine(model, device, I_k, G_k, batch_size, k)
+            i_idxs_hard_k, j_idxs_hard_k = hard_mine(model, device, I_k, G_k, batch_size, k, matches_mat)
         
         labels_hard = dataset.calc_matches_bool(get_idxs_in_original_set(i_idxs_hard_k), 
                                                 get_idxs_in_original_set(j_idxs_hard_k))
@@ -219,13 +227,15 @@ if __name__ == "__main__":
     match_threshold_m = 5
     batch_size = 12
     epochs = 10
-    k = 60
+    k = 300
     alpha = 1e-3
     m = 0.5e-3
     threshold = 0.5
     
-    validate_lat_long, validate_radius_m = (51.76065874460691, -1.2674376580131264), 450
-    # validate_lat_long, validate_radius_m = (51.765443, -1.258657), 500
+    # validate_lat_long_radius_m = (51.76065874460691, -1.2674376580131264, 70)
+    validate_lat_long_radius_m = (51.76065874460691, -1.2674376580131264, 65)
+    # train_lat_long_radius_m = (51.75785736610417, -1.256094136690952, 100)
+    train_lat_long_radius_m = (51.75785736610417, -1.256094136690952, 50)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net_model = CompoundNet()
@@ -233,7 +243,7 @@ if __name__ == "__main__":
     loss_func = MarginBasedLoss(alpha=alpha, m=m)
     optimizer = optim.SGD(net_model.parameters(), lr=0.01, weight_decay=1e-8)
 
-    dataset_dict = init_data(data_dir, dataset_path, structure_time_span, match_threshold_m, validate_lat_long, validate_radius_m)
+    dataset_dict = init_data(data_dir, dataset_path, structure_time_span, match_threshold_m, validate_lat_long_radius_m, train_lat_long_radius_m)
     net_model = train_net(net_model, dataset_dict, batch_size, epochs, optimizer, loss_func, device, k, threshold)
 
     weights_path = os.path.join(weights_dir, f"weights_{datetime.now().strftime('%Y-%m-%d_%H:%M:%S')}.pt")
