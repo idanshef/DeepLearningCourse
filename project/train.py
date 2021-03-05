@@ -240,7 +240,7 @@ if __name__ == "__main__":
     match_threshold_m = 5
     batch_size = 12
     epochs = 10
-    k = 600
+    k = 300
     alpha = 1
     m = 0.5
     threshold = 1
