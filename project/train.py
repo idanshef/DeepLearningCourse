@@ -122,8 +122,10 @@ def balance_batch(I_k, G_k, dataset_orig, i_j_labels_hard_k, j_idxs_match_orig_l
     return Ii_batch_list, Ij_batch_list, Gi_batch_list, Gj_batch_list, labels_batch_list
 
 
-def run_groups_through_model(model, device, writer, is_train, dataset, k, batch_size, threshold=None):
-    if not is_train:
+def run_groups_through_model(model, device, writer, is_train, dataset, k, batch_size, threshold=None, optimizer=None):
+    if is_train:
+        assert optimizer is not None, "optimizer must have value on train"
+    else:
         assert threshold is not None, "threshold must have value on evalutaion"
     
     groups_size_k_list = utils.split_data_to_groups_size_k(dataset, k)
@@ -140,7 +142,6 @@ def run_groups_through_model(model, device, writer, is_train, dataset, k, batch_
         
         if is_train:
             group_loss = 0
-            optimizer.zero_grad()
         else:
             group_accuracy = 0
         
@@ -194,6 +195,7 @@ def run_groups_through_model(model, device, writer, is_train, dataset, k, batch_
                 print(f"\t\tBatch: {batch_idx+1}/{len(labels_batch_list)}, loss: {loss.item()}")
                 loss.backward()
                 optimizer.step()
+                optimizer.zero_grad()
             else:
                 print(f"\t\tBatch: {batch_idx+1}/{len(labels_batch_list)}")
             
@@ -217,10 +219,10 @@ def train_net(model, dataset_dict, batch_size, epochs, optimizer, loss_func, dev
     for epoch in range(epochs):
         print(f"Epoch: {epoch+1}/{epochs}")
         model.train()
-        mean_loss = run_groups_through_model(model, device, writer, True, dataset_dict['train'], k, batch_size)
+        mean_loss = run_groups_through_model(model, device, writer, True, dataset_dict['train'], k, batch_size, optimizer=optimizer)
         with torch.no_grad():
             model.eval()
-            val_accuracy = run_groups_through_model(model, device, writer, False, dataset_dict['val'], k, batch_size, threshold)
+            val_accuracy = run_groups_through_model(model, device, writer, False, dataset_dict['val'], k, batch_size, threshold=threshold)
         
         writer.add_scalar("Loss-train", mean_loss, epoch)
         writer.add_scalar("Evaluation", val_accuracy, epoch)
